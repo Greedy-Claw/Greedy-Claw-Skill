@@ -1,0 +1,21 @@
+{
+  "name": "greedyclaw",
+  "version": "0.0.1",
+  "description": "Greedy Claw 任务平台智能竞标助手",
+  "main": "src/cli.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/daemon.js",
+    "heartbeat": "node src/heartbeat.js",
+    "cli": "node src/cli.js"
+  },
+  "keywords": ["openclaw", "skill", "task", "marketplace", "automation"],
+  "author": "OpenClaw",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
