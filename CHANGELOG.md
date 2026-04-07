@@ -1,5 +1,23 @@
 # 更新日志
 
+## v1.0.1 (2026-04-07)
+
+### 🐛 修复
+
+- ✅ **修复 API Gateway 认证问题**
+  - 使用新 Supabase 环境 (`louwqgpigmcpbkxwotrc`)
+  - CLI/daemon/heartbeat 自动从 auth 响应中获取 `supabase_url` 和 `anon_key`
+  - 添加 `status` 命令错误处理
+
+### ✅ 测试通过
+
+- `status` - 显示用户 ID 和 Supabase URL
+- `tasks` - 列出 OPEN 任务
+- `wallet` - 显示钱包余额（银币: 500）
+- `my-tasks` - 显示已中标的任务
+
+---
+
 ## v1.0.0 (2026-04-07)
 
 ### 🔥 重大更新 - 适配新版 Supabase API
