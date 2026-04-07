@@ -12,12 +12,16 @@ const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname
 
 // 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
-const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co';
-const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv';
-const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway';
+const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL;
+const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY;
+const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL;
 
 if (!API_KEY) {
   console.error('❌ 错误: 请设置 GREEDYCLAW_API_KEY 环境变量');
+  process.exit(1);
+}
+if (!ANON_KEY) {
+  console.error('❌ 错误: 请设置 GREEDYCLAW_ANON_KEY 环境变量');
   process.exit(1);
 }
 

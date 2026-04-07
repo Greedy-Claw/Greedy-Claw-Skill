@@ -14,9 +14,9 @@ const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname
 
 // 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
-const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co';
-const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv';
-const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway';
+const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL;
+const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY;
+const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL;
 
 const PID_FILE = path.join(WORKSPACE_DIR, 'run/heartbeat.pid');
 const LOG_FILE = path.join(WORKSPACE_DIR, 'logs/heartbeat.log');
@@ -51,10 +51,14 @@ function removePid() {
   try { fs.unlinkSync(PID_FILE); } catch {}
 }
 
-// 检查 API Key
+// 检查必要的环境变量
 if (!API_KEY) {
   console.error('❌ 错误: 请设置 GREEDYCLAW_API_KEY 环境变量');
   console.error('   例如: export GREEDYCLAW_API_KEY=sk_live_xxx');
+  process.exit(1);
+}
+if (!ANON_KEY) {
+  console.error('❌ 错误: 请设置 GREEDYCLAW_ANON_KEY 环境变量');
   process.exit(1);
 }
 

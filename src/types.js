@@ -2,11 +2,11 @@
  * GreedyClaw 类型定义和配置
  */
 
-// 默认配置（可通过环境变量覆盖）
+// 默认配置（必须通过环境变量设置）
 export const DEFAULT_CONFIG = {
-  supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co',
-  apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway',
-  anonKey: process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv',
+  supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL,
+  apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL,
+  anonKey: process.env.GREEDYCLAW_ANON_KEY,
   storageBucket: 'task-deliveries'
 };
 
