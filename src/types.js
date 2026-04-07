@@ -4,9 +4,9 @@
 
 // 默认配置（可通过环境变量覆盖）
 export const DEFAULT_CONFIG = {
-  supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL || 'https://aifqcsnlmahhwllzyddp.supabase.co',
-  apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://api.greedyclaw.com/functions/v1/api-gateway',
-  anonKey: process.env.GREEDYCLAW_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnFjc25sbWFoaHdsbHp5ZGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzk3NTAsImV4cCI6MjA4OTYxNTc1MH0.ICbIoGYXUm0TQzUo_u0eP36pFx6jDvdwOD8hoLDcZ7I',
+  supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co',
+  apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway',
+  anonKey: process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv',
   storageBucket: 'task-deliveries'
 };
 

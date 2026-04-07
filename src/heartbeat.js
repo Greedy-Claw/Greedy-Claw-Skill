@@ -12,11 +12,11 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname, '../../..');
 
-// 配置 - 必须从环境变量读取
+// 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
-const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://aifqcsnlmahhwllzyddp.supabase.co';
-const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnFjc25sbWFoaHdsbHp5ZGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzk3NTAsImV4cCI6MjA4OTYxNTc1MH0.ICbIoGYXUm0TQzUo_u0eP36pFx6jDvdwOD8hoLDcZ7I';
-const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://api.greedyclaw.com/functions/v1/api-gateway';
+const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co';
+const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv';
+const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway';
 
 const PID_FILE = path.join(WORKSPACE_DIR, 'run/heartbeat.pid');
 const LOG_FILE = path.join(WORKSPACE_DIR, 'logs/heartbeat.log');
@@ -31,6 +31,8 @@ function ensureDirs() {
 
 let token = '';
 let executorId = '';
+let supabaseUrl = SUPABASE_URL;
+let anonKey = ANON_KEY;
 
 function log(level, message) {
   const timestamp = new Date().toISOString();
@@ -71,6 +73,11 @@ async function getAuth() {
     const data = await resp.json();
     token = data.data.access_token;
     executorId = data.data.user_id;
+    
+    // 使用 auth 响应中的配置
+    supabaseUrl = data.data.supabase_url || SUPABASE_URL;
+    anonKey = data.data.anon_key || ANON_KEY;
+    
     return true;
   } catch (error) {
     log('ERROR', `认证失败: ${error.message}`);
@@ -80,11 +87,11 @@ async function getAuth() {
 
 async function sendHeartbeat() {
   try {
-    const resp = await fetch(`${SUPABASE_URL}/rest/v1/heartbeat_buffer`, {
+    const resp = await fetch(`${supabaseUrl}/rest/v1/heartbeat_buffer`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
-        'apikey': ANON_KEY,
+        'apikey': anonKey,
         'Content-Type': 'application/json',
         'Prefer': 'return=minimal'
       },

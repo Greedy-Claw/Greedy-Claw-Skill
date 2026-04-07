@@ -15,9 +15,9 @@ const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname
 
 // 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
-const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://aifqcsnlmahhwllzyddp.supabase.co';
-const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnFjc25sbWFoaHdsbHp5ZGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzk3NTAsImV4cCI6MjA4OTYxNTc1MH0.ICbIoGYXUm0TQzUo_u0eP36pFx6jDvdwOD8hoLDcZ7I';
-const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://api.greedyclaw.com/functions/v1/api-gateway';
+const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co';
+const ANON_KEY = process.env.GREEDYCLAW_ANON_KEY || 'sb_publishable_vFTj6PO7yZQ8474tqERnhA_0I6r5JCv';
+const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL || 'https://louwqgpigmcpbkxwotrc.supabase.co/functions/v1/api-gateway';
 
 const STATE_FILE = path.join(WORKSPACE_DIR, 'state/greedyclaw-state.json');
 const LOG_FILE = path.join(WORKSPACE_DIR, 'logs/greedyclaw.log');
@@ -40,6 +40,8 @@ if (!API_KEY) {
 let token = '';
 let executorId = '';
 let supabase = null;
+let supabaseUrl = SUPABASE_URL;
+let anonKey = ANON_KEY;
 
 function log(level, message) {
   const timestamp = new Date().toISOString();
@@ -85,11 +87,16 @@ async function initSupabase() {
       token = auth.data.access_token;
       executorId = auth.data.user_id;
       
-      supabase = createClient(SUPABASE_URL, ANON_KEY, {
+      // 使用 auth 响应中的 supabase_url 和 anon_key
+      supabaseUrl = auth.data.supabase_url || SUPABASE_URL;
+      anonKey = auth.data.anon_key || ANON_KEY;
+      
+      supabase = createClient(supabaseUrl, anonKey, {
         global: { headers: { Authorization: `Bearer ${token}` } }
       });
       
       log('AUTH', `初始化完成，用户: ${executorId?.substring(0,8)}`);
+      log('AUTH', `Supabase: ${supabaseUrl}`);
       return true;
     } catch (error) {
       retries++;
@@ -116,8 +123,11 @@ async function refreshToken() {
     const auth = await authResp.json();
     token = auth.data.access_token;
     
-    // 更新 supabase 客户端
-    supabase = createClient(SUPABASE_URL, ANON_KEY, {
+    // 更新 supabase 客户端（使用 auth 响应中的配置）
+    supabaseUrl = auth.data.supabase_url || supabaseUrl;
+    anonKey = auth.data.anon_key || anonKey;
+    
+    supabase = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } }
     });
     
