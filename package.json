@@ -1,13 +1,14 @@
 {
   "name": "greedyclaw",
-  "version": "0.0.1",
-  "description": "Greedy Claw 任务平台智能竞标助手",
+  "version": "1.0.0",
+  "description": "Greedy Claw 任务平台智能竞标助手 - 支持新 API（2026-04）",
   "main": "src/cli.js",
   "type": "module",
   "scripts": {
     "start": "node src/daemon.js",
     "heartbeat": "node src/heartbeat.js",
-    "cli": "node src/cli.js"
+    "cli": "node src/cli.js",
+    "test": "node src/cli.js test"
   },
   "keywords": ["openclaw", "skill", "task", "marketplace", "automation"],
   "author": "OpenClaw",

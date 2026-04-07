@@ -165,13 +165,14 @@ async function autoBid(task) {
 
     log('BID', `竞标 [${task.id?.substring(0,8)}] - ${evalResult.price} ${task.currency_type}`);
 
+    // 新版 API：使用 proposal_summary 替代废弃的 outcome
     const { error } = await supabase.from('bids').insert({
       task_id: task.id,
       executor_id: executorId,
       price: evalResult.price,
       eta_seconds: evalResult.eta,
-      proposal: '智能执行，高效可靠',
-      outcome: '按时高质量交付',
+      proposal: '智能执行，高效可靠。\n\n我将使用 OpenClaw 的强大工具链，为您高质量完成任务。',
+      proposal_summary: '智能执行，高效可靠，按时高质量交付'
     });
 
     if (error) {
@@ -220,14 +221,99 @@ async function executeTask(task) {
   }
 }
 
-// 提交结果
+// 更新任务状态为 RUNNING
+async function updateTaskStatus(taskId, status = 'RUNNING') {
+  try {
+    const { error } = await supabase
+      .from('tasks')
+      .update({ status })
+      .eq('id', taskId);
+    
+    if (error) {
+      log('WARN', `更新任务状态失败: ${error.message}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    log('ERROR', `更新任务状态异常: ${error.message}`);
+    return false;
+  }
+}
+
+// 生成交付摘要（500字符内）
+function generateDeliverySummary(result) {
+  if (result.type === 'poem') {
+    return `已为您创作诗歌一首，包含完整内容和格式。`;
+  } else if (result.type === 'itinerary') {
+    return `已为您设计${result.itinerary?.title || '旅行路线'}，包含详细时间安排和交通建议。`;
+  } else if (result.type === 'joke') {
+    return `已为您准备了笑话一则，希望能带给您欢乐。`;
+  } else if (result.type === 'recipe') {
+    return `已为您提供${result.recipe?.title || '菜品'}的详细做法，包含食材、步骤和技巧。`;
+  } else if (result.type === 'story') {
+    return `已为您创作故事一篇，情节完整，富有创意。`;
+  } else {
+    return `任务已完成，结果已提交。${result.summary || ''}`.substring(0, 500);
+  }
+}
+
+// 生成 Markdown 格式的交付详情
+function generateDeliveryMarkdown(result, task) {
+  let md = `# 任务交付报告\n\n`;
+  md += `**任务ID**: ${task.id}\n`;
+  md += `**完成时间**: ${new Date().toISOString()}\n\n`;
+  
+  if (result.type === 'poem') {
+    md += `## 创作内容\n\n${result.content}\n`;
+  } else if (result.type === 'itinerary') {
+    const it = result.itinerary;
+    md += `## ${it.title}\n\n`;
+    md += `### 行程安排\n\n`;
+    it.schedule.forEach(item => {
+      md += `**${item.time}** - ${item.location}\n`;
+      md += `  - 活动：${item.activity}\n`;
+      md += `  - 建议：${item.tips}\n\n`;
+    });
+    md += `### 交通建议\n\n${it.transportation}\n\n`;
+    md += `### 预算参考\n\n${it.budget}\n\n`;
+    md += `### 注意事项\n\n${it.notes}\n`;
+  } else if (result.type === 'recipe') {
+    const r = result.recipe;
+    md += `## ${r.title}\n\n`;
+    md += `**难度**: ${r.difficulty}\n`;
+    md += `**时间**: ${r.time}\n\n`;
+    md += `### 食材清单\n\n`;
+    r.ingredients.forEach(ing => md += `- ${ing}\n`);
+    md += `\n### 制作步骤\n\n`;
+    r.steps.forEach((step, i) => md += `${i + 1}. ${step}\n`);
+    md += `\n### 小贴士\n\n${r.tips}\n`;
+  } else if (result.type === 'story') {
+    md += `## 故事内容\n\n${result.content}\n`;
+  } else {
+    md += `## 执行结果\n\n`;
+    md += '```json\n' + JSON.stringify(result, null, 2) + '\n```\n';
+  }
+  
+  return md;
+}
+
+// 提交结果（新版 API）
 async function submitResult(task, result) {
   try {
     log('SUBMIT', `提交 [${task.id?.substring(0,8)}]`);
     
+    // 生成交付内容
+    const deliverySummary = generateDeliverySummary(result);
+    const deliveryMd = generateDeliveryMarkdown(result, task);
+    
+    // 新版 RPC：包含交付摘要、详情和文件列表
     const { error } = await supabase.rpc('executor_submit_result', {
       p_task_id: task.id,
-      p_result_data: { success: true, ...result }
+      p_result_data: { success: true, ...result },
+      p_status: 'PENDING_CONFIRM',  // 提交后进入待确认状态
+      p_delivery_summary: deliverySummary,
+      p_delivery_md: deliveryMd,
+      p_delivery_files_list: []  // 暂无文件交付
     });
 
     if (error) {
@@ -238,7 +324,11 @@ async function submitResult(task, result) {
         await refreshToken();
         const { error: retryError } = await supabase.rpc('executor_submit_result', {
           p_task_id: task.id,
-          p_result_data: { success: true, ...result }
+          p_result_data: { success: true, ...result },
+          p_status: 'PENDING_CONFIRM',
+          p_delivery_summary: deliverySummary,
+          p_delivery_md: deliveryMd,
+          p_delivery_files_list: []
         });
         if (retryError) throw retryError;
       } else {
@@ -263,6 +353,9 @@ async function handleAssignedTask(task) {
     if (executedTasks.has(task.id)) return;
 
     log('ASSIGNED', `🎯 中标 [${task.id?.substring(0,8)}]: ${task.instruction}`);
+    
+    // 更新任务状态为 RUNNING
+    await updateTaskStatus(task.id, 'RUNNING');
     
     const result = await executeTask(task);
     const submitted = await submitResult(task, result);
