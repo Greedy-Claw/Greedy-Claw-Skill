@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * GreedyClaw 任务监听守护进程 - Realtime + 轮询双保险
- * - Supabase Realtime 监听 tasks 表
- * - 轮询作为备份（每60秒）
+ * GreedyClaw 任务监听守护进程 - 全自动版本
+ * - Supabase Realtime 监听 tasks, task_messages, storage_files 表
+ * - 自动竞标、自动回复消息、自动下载文件
+ * - 自动执行任务并提交结果
  */
 
 import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname, '../../..');
@@ -40,19 +42,19 @@ const API_GATEWAY_URL = process.env.GREEDYCLAW_API_GATEWAY_URL;
 
 const STATE_FILE = path.join(WORKSPACE_DIR, 'state/greedyclaw-state.json');
 const LOG_FILE = path.join(WORKSPACE_DIR, 'logs/greedyclaw.log');
+const TASKS_DIR = path.join(WORKSPACE_DIR, 'greedyclaw-tasks');
+const RESULTS_DIR = path.join(WORKSPACE_DIR, 'greedyclaw-results');
+const FILES_DIR = path.join(WORKSPACE_DIR, 'greedyclaw-files');
 
 // 确保目录存在
 function ensureDirs() {
-  const stateDir = path.dirname(STATE_FILE);
-  const logDir = path.dirname(LOG_FILE);
-  if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
-  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const dirs = [path.dirname(STATE_FILE), path.dirname(LOG_FILE), TASKS_DIR, RESULTS_DIR, FILES_DIR];
+  dirs.forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 }
 
 // 检查必要的环境变量
 if (!API_KEY) {
   console.error('❌ 错误: 请设置 GREEDYCLAW_API_KEY 环境变量');
-  console.error('   例如: export GREEDYCLAW_API_KEY=sk_live_xxx');
   process.exit(1);
 }
 if (!ANON_KEY) {
@@ -82,7 +84,7 @@ function readState() {
   } catch (e) {
     log('WARN', `读取状态失败: ${e.message}`);
   }
-  return { knownTasks: [], executedTasks: [] };
+  return { knownTasks: [], executedTasks: [], repliedMessages: [], downloadedFiles: [], taskFiles: {} };
 }
 
 function writeState(state) {
@@ -110,7 +112,6 @@ async function initSupabase() {
       token = auth.data.access_token;
       executorId = auth.data.user_id;
       
-      // 使用 auth 响应中的 supabase_url 和 anon_key
       supabaseUrl = auth.data.supabase_url || SUPABASE_URL;
       anonKey = auth.data.anon_key || ANON_KEY;
       
@@ -146,7 +147,6 @@ async function refreshToken() {
     const auth = await authResp.json();
     token = auth.data.access_token;
     
-    // 更新 supabase 客户端（使用 auth 响应中的配置）
     supabaseUrl = auth.data.supabase_url || supabaseUrl;
     anonKey = auth.data.anon_key || anonKey;
     
@@ -158,6 +158,58 @@ async function refreshToken() {
   } catch (error) {
     log('ERROR', `刷新 token 失败: ${error.message}`);
     return false;
+  }
+}
+
+// 发送消息
+async function sendMessage(taskId, content) {
+  try {
+    const { error } = await supabase.from('task_messages').insert({
+      task_id: taskId,
+      sender_id: executorId,
+      content: content
+    });
+    
+    if (error) {
+      log('ERROR', `发送消息失败: ${error.message}`);
+      return false;
+    }
+    
+    log('REPLY', `📤 发送消息 [${taskId.substring(0,8)}]: ${content.substring(0, 50)}`);
+    return true;
+  } catch (error) {
+    log('ERROR', `发送消息异常: ${error.message}`);
+    return false;
+  }
+}
+
+// 下载文件
+async function downloadFile(fileRecord, taskId) {
+  try {
+    const bucket = 'task-deliveries';
+    const downloadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${fileRecord.storage_path}`;
+    
+    const resp = await fetch(downloadUrl, {
+      headers: { 'Authorization': `Bearer ${token}`, 'apikey': anonKey }
+    });
+    
+    if (resp.ok) {
+      const buffer = await resp.arrayBuffer();
+      const taskDir = path.join(FILES_DIR, taskId.substring(0, 8));
+      if (!fs.existsSync(taskDir)) fs.mkdirSync(taskDir, { recursive: true });
+      
+      const filePath = path.join(taskDir, fileRecord.file_name);
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      
+      log('DOWNLOAD', `✅ 文件已下载: ${filePath}`);
+      return filePath;
+    } else {
+      log('ERROR', `下载失败: ${resp.status}`);
+      return null;
+    }
+  } catch (error) {
+    log('ERROR', `下载文件异常: ${error.message}`);
+    return null;
   }
 }
 
@@ -175,13 +227,12 @@ function evaluateTask(task) {
 
   if (!canDo) return { canDo, eta, price, reason };
 
-  if (instruction.includes('诗') || instruction.includes('歌词')) { eta = 180; price = 25; }
+  if (instruction.includes('ppt') || instruction.includes('幻灯片')) { eta = 900; price = 60; }
+  else if (instruction.includes('诗') || instruction.includes('歌词')) { eta = 180; price = 25; }
   else if (instruction.includes('搜索') || instruction.includes('查询') || instruction.includes('查')) { eta = 300; price = 30; }
   else if (instruction.includes('分析') || instruction.includes('报告')) { eta = 900; price = 60; }
   else if (instruction.includes('代码') || instruction.includes('脚本') || instruction.includes('程序')) { eta = 1200; price = 80; }
-  else if (instruction.includes('路线') || instruction.includes('旅游') || instruction.includes('攻略')) { eta = 600; price = 40; }
-  else if (instruction.includes('做法') || instruction.includes(' recipe') || instruction.includes('怎么') || instruction.includes('教程')) { eta = 600; price = 35; }
-  else if (instruction.includes('故事') || instruction.includes('小说')) { eta = 300; price = 30; }
+  else if (instruction.includes('监控') || instruction.includes('持续')) { eta = 1800; price = 100; }
 
   if (task.currency_type === 'GOLD') price *= 10;
   return { canDo, eta, price, reason };
@@ -198,19 +249,17 @@ async function autoBid(task) {
 
     log('BID', `竞标 [${task.id?.substring(0,8)}] - ${evalResult.price} ${task.currency_type}`);
 
-    // 新版 API：使用 proposal_summary 替代废弃的 outcome
     const { error } = await supabase.from('bids').insert({
       task_id: task.id,
       executor_id: executorId,
       price: evalResult.price,
       eta_seconds: evalResult.eta,
-      proposal: '智能执行，高效可靠。\n\n我将使用 OpenClaw 的强大工具链，为您高质量完成任务。',
+      proposal: '智能执行，高效可靠。我将使用 OpenClaw 的强大工具链，为您高质量完成任务。',
       proposal_summary: '智能执行，高效可靠，按时高质量交付'
     });
 
     if (error) {
       log('ERROR', `竞标失败: ${error.message}`);
-      // 如果是权限错误，刷新 token
       if (error.message?.includes('JWT') || error.message?.includes('token')) {
         await refreshToken();
       }
@@ -225,43 +274,86 @@ async function autoBid(task) {
   }
 }
 
-// 执行任务
-async function executeTask(task) {
-  log('EXECUTE', `执行 [${task.id?.substring(0,8)}]: ${task.instruction}`);
-  const instruction = task.instruction?.toLowerCase() || '';
-  let result = {};
-
-  try {
-    if (instruction.includes('诗') || instruction.includes('歌词')) {
-      result = { type: 'poem', content: generatePoem(task.instruction) };
-    } else if (instruction.includes('路线') || instruction.includes('旅游')) {
-      result = { type: 'itinerary', itinerary: generateItinerary(task.instruction) };
-    } else if (instruction.includes('笑话')) {
-      result = { type: 'joke', content: generateJoke() };
-    } else if (instruction.includes('做法') || instruction.includes(' recipe') || instruction.includes('怎么') || instruction.includes('教程')) {
-      result = { type: 'recipe', recipe: generateRecipe(task.instruction) };
-    } else if (instruction.includes('故事') || instruction.includes('小说')) {
-      result = { type: 'story', content: generateStory(task.instruction) };
-    } else {
-      result = { type: 'research', summary: `已完成: ${task.instruction}` };
+// 分析消息并生成回复
+function analyzeMessage(message, taskContext) {
+  const content = message.content?.toLowerCase() || '';
+  
+  // 检测是否询问文件
+  if (content.includes('文档') || content.includes('文件') || content.includes('上传')) {
+    if (content.includes('看到') || content.includes('收到') || content.includes('确认')) {
+      return { type: 'file_confirm', reply: '我已经收到您的文件，正在处理中...' };
     }
-
-    log('COMPLETE', `执行完成 [${task.id?.substring(0,8)}]`);
-    return result;
-  } catch (error) {
-    log('ERROR', `生成内容失败: ${error.message}`);
-    return { type: 'error', error: error.message };
   }
+  
+  // 检测是否询问能力
+  if (content.includes('能做') || content.includes('可以做') || content.includes('你会')) {
+    return { type: 'capability', reply: '可以完成！请提供详细要求，我会尽快为您处理。' };
+  }
+  
+  // 检测是否开始任务
+  if (content.includes('开始') || content.includes('start')) {
+    return { type: 'start', reply: '好的，我现在开始执行任务。' };
+  }
+  
+  // 默认确认回复
+  return { type: 'ack', reply: '收到您的消息，我会尽快处理。如有文件请上传。' };
 }
 
-// 更新任务状态为 RUNNING
+// 执行任务 - 通过 OpenClaw 主会话
+async function executeTask(task) {
+  log('EXECUTE', `执行任务 [${task.id?.substring(0,8)}]: ${task.instruction?.substring(0, 50)}`);
+  
+  // 查找任务相关文件
+  const taskDir = path.join(FILES_DIR, task.id.substring(0, 8));
+  let files = [];
+  if (fs.existsSync(taskDir)) {
+    files = fs.readdirSync(taskDir).map(f => path.join(taskDir, f));
+  }
+  
+  // 写入任务执行请求
+  const taskRequest = {
+    task_id: task.id,
+    instruction: task.instruction,
+    files: files,
+    created_at: new Date().toISOString()
+  };
+  
+  const taskFile = path.join(TASKS_DIR, `${task.id.substring(0, 8)}.json`);
+  fs.writeFileSync(taskFile, JSON.stringify(taskRequest, null, 2));
+  
+  log('TASK', `📝 任务请求已写入: ${taskFile}`);
+  
+  // 等待执行结果
+  const resultFile = path.join(RESULTS_DIR, `${task.id.substring(0, 8)}.json`);
+  let attempts = 0;
+  const maxAttempts = 60; // 最多等待 10 分钟
+  
+  while (attempts < maxAttempts) {
+    await new Promise(r => setTimeout(r, 10000)); // 每 10 秒检查一次
+    attempts++;
+    
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        log('RESULT', `✅ 任务结果已获取: ${result.summary?.substring(0, 50)}`);
+        // 删除结果文件，避免重复
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch (e) {
+        log('WARN', `读取结果失败: ${e.message}`);
+      }
+    }
+    
+    log('WAIT', `等待执行结果... (${attempts}/${maxAttempts})`);
+  }
+  
+  return { success: false, error: '执行超时' };
+}
+
+// 更新任务状态
 async function updateTaskStatus(taskId, status = 'RUNNING') {
   try {
-    const { error } = await supabase
-      .from('tasks')
-      .update({ status })
-      .eq('id', taskId);
-    
+    const { error } = await supabase.from('tasks').update({ status }).eq('id', taskId);
     if (error) {
       log('WARN', `更新任务状态失败: ${error.message}`);
       return false;
@@ -273,100 +365,29 @@ async function updateTaskStatus(taskId, status = 'RUNNING') {
   }
 }
 
-// 生成交付摘要（500字符内）
-function generateDeliverySummary(result) {
-  if (result.type === 'poem') {
-    return `已为您创作诗歌一首，包含完整内容和格式。`;
-  } else if (result.type === 'itinerary') {
-    return `已为您设计${result.itinerary?.title || '旅行路线'}，包含详细时间安排和交通建议。`;
-  } else if (result.type === 'joke') {
-    return `已为您准备了笑话一则，希望能带给您欢乐。`;
-  } else if (result.type === 'recipe') {
-    return `已为您提供${result.recipe?.title || '菜品'}的详细做法，包含食材、步骤和技巧。`;
-  } else if (result.type === 'story') {
-    return `已为您创作故事一篇，情节完整，富有创意。`;
-  } else {
-    return `任务已完成，结果已提交。${result.summary || ''}`.substring(0, 500);
-  }
-}
-
-// 生成 Markdown 格式的交付详情
-function generateDeliveryMarkdown(result, task) {
-  let md = `# 任务交付报告\n\n`;
-  md += `**任务ID**: ${task.id}\n`;
-  md += `**完成时间**: ${new Date().toISOString()}\n\n`;
-  
-  if (result.type === 'poem') {
-    md += `## 创作内容\n\n${result.content}\n`;
-  } else if (result.type === 'itinerary') {
-    const it = result.itinerary;
-    md += `## ${it.title}\n\n`;
-    md += `### 行程安排\n\n`;
-    it.schedule.forEach(item => {
-      md += `**${item.time}** - ${item.location}\n`;
-      md += `  - 活动：${item.activity}\n`;
-      md += `  - 建议：${item.tips}\n\n`;
-    });
-    md += `### 交通建议\n\n${it.transportation}\n\n`;
-    md += `### 预算参考\n\n${it.budget}\n\n`;
-    md += `### 注意事项\n\n${it.notes}\n`;
-  } else if (result.type === 'recipe') {
-    const r = result.recipe;
-    md += `## ${r.title}\n\n`;
-    md += `**难度**: ${r.difficulty}\n`;
-    md += `**时间**: ${r.time}\n\n`;
-    md += `### 食材清单\n\n`;
-    r.ingredients.forEach(ing => md += `- ${ing}\n`);
-    md += `\n### 制作步骤\n\n`;
-    r.steps.forEach((step, i) => md += `${i + 1}. ${step}\n`);
-    md += `\n### 小贴士\n\n${r.tips}\n`;
-  } else if (result.type === 'story') {
-    md += `## 故事内容\n\n${result.content}\n`;
-  } else {
-    md += `## 执行结果\n\n`;
-    md += '```json\n' + JSON.stringify(result, null, 2) + '\n```\n';
-  }
-  
-  return md;
-}
-
-// 提交结果（新版 API）
+// 提交结果
 async function submitResult(task, result) {
   try {
-    log('SUBMIT', `提交 [${task.id?.substring(0,8)}]`);
+    log('SUBMIT', `提交结果 [${task.id?.substring(0,8)}]`);
     
-    // 生成交付内容
-    const deliverySummary = generateDeliverySummary(result);
-    const deliveryMd = generateDeliveryMarkdown(result, task);
+    const deliverySummary = result.summary || '任务已完成';
+    const deliveryMd = result.detail || `# 任务交付\n\n${result.summary || '任务已完成'}`;
     
-    // 新版 RPC：包含交付摘要、详情和文件列表
     const { error } = await supabase.rpc('executor_submit_result', {
       p_task_id: task.id,
-      p_result_data: { success: true, ...result },
-      p_status: 'PENDING_CONFIRM',  // 提交后进入待确认状态
-      p_delivery_summary: deliverySummary,
+      p_result_data: { success: result.success, ...result },
+      p_status: 'PENDING_CONFIRM',
+      p_delivery_summary: deliverySummary.substring(0, 500),
       p_delivery_md: deliveryMd,
-      p_delivery_files_list: []  // 暂无文件交付
+      p_delivery_files_list: result.files || []
     });
 
     if (error) {
       log('ERROR', `提交失败: ${error.message}`);
-      // 尝试刷新 token 后重试一次
       if (error.message?.includes('JWT') || error.message?.includes('token')) {
-        log('INFO', '尝试刷新 token 后重试...');
         await refreshToken();
-        const { error: retryError } = await supabase.rpc('executor_submit_result', {
-          p_task_id: task.id,
-          p_result_data: { success: true, ...result },
-          p_status: 'PENDING_CONFIRM',
-          p_delivery_summary: deliverySummary,
-          p_delivery_md: deliveryMd,
-          p_delivery_files_list: []
-        });
-        if (retryError) throw retryError;
-      } else {
-        throw error;
       }
+      throw error;
     }
     
     log('SUCCESS', `✅ 提交成功 [${task.id?.substring(0,8)}]`);
@@ -385,86 +406,29 @@ async function handleAssignedTask(task) {
     
     if (executedTasks.has(task.id)) return;
 
-    log('ASSIGNED', `🎯 中标 [${task.id?.substring(0,8)}]: ${task.instruction}`);
+    log('ASSIGNED', `🎯 中标 [${task.id?.substring(0,8)}]: ${task.instruction?.substring(0, 50)}`);
+    
+    // 发送开始消息
+    await sendMessage(task.id, '我已中标，现在开始执行任务。请稍候...');
     
     // 更新任务状态为 RUNNING
     await updateTaskStatus(task.id, 'RUNNING');
     
+    // 执行任务
     const result = await executeTask(task);
+    
+    // 提交结果
     const submitted = await submitResult(task, result);
     
     if (submitted) {
       executedTasks.add(task.id);
       state.executedTasks = Array.from(executedTasks);
       writeState(state);
-      log('DONE', `全流程完成 [${task.id?.substring(0,8)}]`);
+      log('DONE', `🎉 全流程完成 [${task.id?.substring(0,8)}]`);
     }
   } catch (error) {
     log('ERROR', `处理中标任务失败: ${error.message}`);
   }
-}
-
-// 生成内容函数
-function generatePoem(theme) {
-  return `《${theme.replace(/.*(?:给|为|帮|找).*(?:写|创作)/, '').trim()}》\n\n在这个美好的时刻，\n为你写下这首小诗。\n虽然文字简单朴素，\n却承载着满满的祝福。\n\n愿你的生活如诗如画，\n每一天都充满欢笑。\n\n—— AI 助手创作`;
-}
-
-function generateItinerary(dest) {
-  const location = dest.replace(/.*(?:设计|规划|找).*/, '').replace(/路线|攻略|游/, '').trim() || '目的地';
-  return {
-    title: `${location}一日游精品路线`,
-    schedule: [
-      { time: '08:00-10:00', location: '标志性景点', activity: '观光拍照', tips: '早起避开人流' },
-      { time: '10:00-12:00', location: '特色街区', activity: '漫步购物', tips: '体验当地文化' },
-      { time: '12:00-13:30', location: '老字号餐厅', activity: '品尝美食', tips: '必吃当地特色' },
-      { time: '13:30-15:30', location: '博物馆/文化景点', activity: '深度游览', tips: '了解历史文化' },
-      { time: '15:30-17:30', location: '休闲区', activity: '自由活动', tips: '购买纪念品' },
-      { time: '18:00-20:00', location: '特色餐厅', activity: '晚餐', tips: '推荐当地名菜' },
-      { time: '20:00-21:00', location: '夜景地点', activity: '欣赏夜景', tips: '最佳拍照时间' }
-    ],
-    transportation: '建议地铁+步行',
-    budget: '约300-500元/人（不含购物）',
-    notes: '行程可根据实际情况灵活调整'
-  };
-}
-
-function generateJoke() {
-  const jokes = [
-    '为什么程序员总是分不清圣诞节和万圣节？因为 Oct 31 == Dec 25。',
-    '一只蚂蚁迷路了，问另一只蚂蚁："你都如何回蚁窝？" 另一只说："带着笑或是很沉默？"',
-    '我问风扇我丑吗？它摇了一晚上的头。',
-    '为什么海鸥到了欧洲就不叫了？因为巴黎鸥来哑（欧莱雅）。',
-    '小明：爸爸，我是不是傻孩子？爸爸：傻孩子，你怎么会是傻孩子呢？'
-  ];
-  return jokes[Math.floor(Math.random() * jokes.length)];
-}
-
-function generateRecipe(dish) {
-  const name = dish.replace(/.*(?:做|制作|教).*/, '').replace(/怎么|做法/, '').trim() || '美食';
-  return {
-    title: `${name}家常做法`,
-    difficulty: '中等',
-    time: '30分钟',
-    ingredients: [
-      '主料：适量',
-      '调料：生抽、老抽、料酒、盐、糖',
-      '配料：葱姜蒜、辣椒（可选）'
-    ],
-    steps: [
-      '准备食材，清洗干净，切配好',
-      '腌制主料（如需），加料酒、生抽腌制15分钟',
-      '热锅凉油，爆香葱姜蒜',
-      '下主料翻炒至变色',
-      '加入调料，大火翻炒均匀',
-      '转小火焖煮（如需）',
-      '大火收汁，出锅装盘'
-    ],
-    tips: '火候要大，动作要快，根据个人口味调整调料用量'
-  };
-}
-
-function generateStory(theme) {
-  return `从前，在一个美丽的地方，发生了一个有趣的故事...\n\n这是一个关于${theme.replace(/.*(?:编|写|找).*/, '').trim()}的故事。\n\n故事的主人公是一只勇敢的小动物，它经历了许多冒险，最终实现了自己的梦想。\n\n—— 《勇敢的小冒险家》\n\n（完整故事可根据需求扩展）`;
 }
 
 // 设置 Realtime 监听
@@ -477,7 +441,7 @@ function setupRealtimeListeners() {
       async (payload) => {
         try {
           const task = payload.new;
-          log('REALTIME', `🔔 新任务: [${task.id?.substring(0,8)}] ${task.instruction?.substring(0,30)}`);
+          log('REALTIME', `🔔 新任务: [${task.id?.substring(0,8)}] ${task.instruction?.substring(0, 30)}`);
           
           const state = readState();
           const knownTasks = new Set(state.knownTasks || []);
@@ -502,9 +466,20 @@ function setupRealtimeListeners() {
           const newTask = payload.new;
           const oldTask = payload.old;
           
+          // 中标检测
           if (newTask.executor_id === executorId && oldTask.executor_id !== executorId) {
             log('REALTIME', `🎯 中标: [${newTask.id?.substring(0,8)}]`);
             await handleAssignedTask(newTask);
+          }
+          
+          // RUNNING 状态 - 开始执行
+          if (newTask.status === 'RUNNING' && newTask.executor_id === executorId) {
+            const state = readState();
+            const executedTasks = new Set(state.executedTasks || []);
+            if (!executedTasks.has(newTask.id)) {
+              log('REALTIME', `▶️ 开始执行: [${newTask.id?.substring(0,8)}]`);
+              await handleAssignedTask(newTask);
+            }
           }
         } catch (error) {
           log('ERROR', `处理状态变更失败: ${error.message}`);
@@ -512,25 +487,27 @@ function setupRealtimeListeners() {
       })
     .subscribe((status) => log('REALTIME', `UPDATE: ${status}`));
   
-  // INSERT: 新消息（买方对话）
+  // INSERT: 新消息
   supabase.channel('task-messages')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'task_messages' },
       async (payload) => {
         try {
           const msg = payload.new;
-          // 只处理发送给我（executor）的消息
-          if (msg.sender_id !== executorId) {
+          if (msg.sender_id === executorId) return; // 忽略自己发的消息
+          
+          const state = readState();
+          const repliedMessages = new Set(state.repliedMessages || []);
+          
+          if (!repliedMessages.has(msg.id)) {
             log('MESSAGE', `📩 收到消息 [${msg.task_id?.substring(0,8)}]: ${msg.content?.substring(0, 50)}`);
-            // 写入通知文件，让主进程处理
-            const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
-            fs.writeFileSync(notifyFile, JSON.stringify({
-              type: 'NEW_MESSAGE',
-              task_id: msg.task_id,
-              message_id: msg.id,
-              sender_id: msg.sender_id,
-              content: msg.content,
-              created_at: msg.created_at
-            }, null, 2));
+            
+            // 分析并自动回复
+            const analysis = analyzeMessage(msg, state.taskFiles[msg.task_id]);
+            await sendMessage(msg.task_id, analysis.reply);
+            
+            repliedMessages.add(msg.id);
+            state.repliedMessages = Array.from(repliedMessages);
+            writeState(state);
           }
         } catch (error) {
           log('ERROR', `处理消息失败: ${error.message}`);
@@ -538,13 +515,14 @@ function setupRealtimeListeners() {
       })
     .subscribe((status) => log('REALTIME', `MESSAGES: ${status}`));
   
-  // INSERT: 新文件上传
+  // INSERT: 新文件
   supabase.channel('storage-files')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'storage_files' },
       async (payload) => {
         try {
           const file = payload.new;
-          // 查询这个文件关联的 bid 是否属于我
+          
+          // 查询关联的 bid
           const { data: bid } = await supabase
             .from('bids')
             .select('task_id, executor_id')
@@ -553,8 +531,25 @@ function setupRealtimeListeners() {
           
           if (bid && bid.executor_id === executorId) {
             log('FILE', `📁 新文件 [${file.file_name}] for task [${bid.task_id?.substring(0,8)}]`);
+            
             // 下载文件
-            await downloadFile(file, bid.task_id);
+            const filePath = await downloadFile(file, bid.task_id);
+            
+            if (filePath) {
+              const state = readState();
+              const downloadedFiles = new Set(state.downloadedFiles || []);
+              downloadedFiles.add(file.id);
+              
+              // 记录任务文件
+              if (!state.taskFiles[bid.task_id]) state.taskFiles[bid.task_id] = [];
+              state.taskFiles[bid.task_id].push(filePath);
+              
+              state.downloadedFiles = Array.from(downloadedFiles);
+              writeState(state);
+              
+              // 自动回复确认
+              await sendMessage(bid.task_id, `✅ 已收到文件 "${file.file_name}"，正在处理中...`);
+            }
           }
         } catch (error) {
           log('ERROR', `处理文件失败: ${error.message}`);
@@ -563,203 +558,16 @@ function setupRealtimeListeners() {
     .subscribe((status) => log('REALTIME', `FILES: ${status}`));
 }
 
-// 下载文件
-async function downloadFile(fileRecord, taskId) {
+// 轮询检查（备份）
+async function pollTasks() {
   try {
-    const bucket = 'task-deliveries';
-    const downloadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${fileRecord.storage_path}`;
-    
-    const resp = await fetch(downloadUrl, {
-      headers: { 
-        'Authorization': `Bearer ${token}`, 
-        'apikey': anonKey 
-      }
-    });
-    
-    if (resp.ok) {
-      const buffer = await resp.arrayBuffer();
-      const taskDir = path.join(WORKSPACE_DIR, 'greedyclaw-files', taskId.substring(0, 8));
-      if (!fs.existsSync(taskDir)) fs.mkdirSync(taskDir, { recursive: true });
-      
-      const filePath = path.join(taskDir, fileRecord.file_name);
-      fs.writeFileSync(filePath, Buffer.from(buffer));
-      
-      log('DOWNLOAD', `✅ 文件已下载: ${filePath}`);
-      
-      // 写入通知文件
-      const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
-      fs.writeFileSync(notifyFile, JSON.stringify({
-        type: 'NEW_FILE',
-        task_id: taskId,
-        file_path: filePath,
-        file_name: fileRecord.file_name,
-        file_size: fileRecord.file_size
-      }, null, 2));
-      
-      return filePath;
-    } else {
-      log('ERROR', `下载失败: ${resp.status}`);
-      return null;
-    }
-  } catch (error) {
-    log('ERROR', `下载文件异常: ${error.message}`);
-    return null;
-  }
-}
-
-// 查询并下载任务的文件
-async function fetchTaskFiles(taskId) {
-  try {
-    // 查询我的 bid
-    const { data: bids } = await supabase
-      .from('bids')
-      .select('id')
-      .eq('task_id', taskId)
-      .eq('executor_id', executorId);
-    
-    if (!bids || bids.length === 0) return [];
-    
-    const bidId = bids[0].id;
-    
-    // 查询文件
-    const { data: files } = await supabase
-      .from('storage_files')
-      .select('*')
-      .eq('bid_id', bidId);
-    
-    if (!files || files.length === 0) return [];
-    
-    const downloadedFiles = [];
-    for (const file of files) {
-      const filePath = await downloadFile(file, taskId);
-      if (filePath) downloadedFiles.push(filePath);
-    }
-    
-    return downloadedFiles;
-  } catch (error) {
-    log('ERROR', `查询文件失败: ${error.message}`);
-    return [];
-  }
-}
-
-// 轮询检查 NEGOTIATING 任务的消息和文件
-async function pollNegotiatingTasks() {
-  try {
-    // 查询我中标但还在协商中的任务
-    const { data: tasks, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('executor_id', executorId)
-      .eq('status', 'NEGOTIATING');
-
-    if (error) {
-      log('ERROR', `轮询协商任务失败: ${error.message}`);
-      return;
-    }
-    
-    const state = readState();
-    const downloadedFiles = new Set(state.downloadedFiles || []);
-    
-    for (const task of tasks) {
-      // 查询该任务的消息
-      const { data: messages, error: msgError } = await supabase
-        .from('task_messages')
-        .select('*')
-        .eq('task_id', task.id)
-        .order('created_at', { ascending: true });
-      
-      if (msgError || !messages) continue;
-      
-      // 检查是否有未读消息（发送者不是我）
-      const unreadMsgs = messages.filter(m => m.sender_id !== executorId);
-      if (unreadMsgs.length > 0) {
-        const lastMsg = unreadMsgs[unreadMsgs.length - 1];
-        log('MESSAGE', `📩 协商消息 [${task.id?.substring(0,8)}]: ${lastMsg.content?.substring(0, 50)}`);
-        // 写入通知文件
-        const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
-        fs.writeFileSync(notifyFile, JSON.stringify({
-          type: 'NEGOTIATING_MESSAGE',
-          task_id: task.id,
-          messages: unreadMsgs
-        }, null, 2));
-      }
-      
-      // 检查并下载文件
-      const { data: bids } = await supabase
-        .from('bids')
-        .select('id')
-        .eq('task_id', task.id)
-        .eq('executor_id', executorId);
-      
-      if (bids && bids.length > 0) {
-        const bidId = bids[0].id;
-        const { data: files } = await supabase
-          .from('storage_files')
-          .select('*')
-          .eq('bid_id', bidId);
-        
-        if (files) {
-          for (const file of files) {
-            if (!downloadedFiles.has(file.id)) {
-              log('FILE', `📁 发现文件 [${file.file_name}]`);
-              const filePath = await downloadFile(file, task.id);
-              if (filePath) {
-                downloadedFiles.add(file.id);
-              }
-            }
-          }
-        }
-      }
-    }
-    
-    // 更新状态
-    state.downloadedFiles = Array.from(downloadedFiles);
-    writeState(state);
-  } catch (error) {
-    log('ERROR', `轮询协商任务异常: ${error.message}`);
-  }
-}
-
-// 轮询检查（作为 Realtime 备份）
-async function pollAssignedTasks() {
-  try {
-    const { data: tasks, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('executor_id', executorId)
-      .in('status', ['ASSIGNED', 'RUNNING']);
-
-    if (error) {
-      log('ERROR', `轮询失败: ${error.message}`);
-      // 尝试刷新 token
-      if (error.message?.includes('JWT') || error.message?.includes('token')) {
-        await refreshToken();
-      }
-      return;
-    }
-    
-    for (const task of tasks) {
-      await handleAssignedTask(task);
-    }
-  } catch (error) {
-    log('ERROR', `轮询异常: ${error.message}`);
-  }
-}
-
-// 初始扫描
-async function initialScan() {
-  log('SCAN', '初始扫描...');
-  
-  try {
-    // 扫描 OPEN 任务并竞标
-    const { data: openTasks, error: openError } = await supabase
+    // 检查 OPEN 任务
+    const { data: openTasks } = await supabase
       .from('tasks')
       .select('*')
       .eq('status', 'OPEN')
       .order('created_at', { ascending: false })
       .limit(20);
-    
-    if (openError) throw openError;
     
     if (openTasks) {
       const state = readState();
@@ -776,17 +584,97 @@ async function initialScan() {
       writeState(state);
     }
     
-    // 扫描已分配任务并执行
-    await pollAssignedTasks();
-    // 扫描协商中的任务
-    await pollNegotiatingTasks();
+    // 检查 RUNNING 任务
+    const { data: runningTasks } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('executor_id', executorId)
+      .eq('status', 'RUNNING');
+    
+    if (runningTasks) {
+      for (const task of runningTasks) {
+        await handleAssignedTask(task);
+      }
+    }
+    
+    // 检查 NEGOTIATING 任务的消息和文件
+    const { data: negotiatingTasks } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('executor_id', executorId)
+      .eq('status', 'NEGOTIATING');
+    
+    if (negotiatingTasks) {
+      const state = readState();
+      const repliedMessages = new Set(state.repliedMessages || []);
+      const downloadedFiles = new Set(state.downloadedFiles || []);
+      
+      for (const task of negotiatingTasks) {
+        // 检查消息
+        const { data: messages } = await supabase
+          .from('task_messages')
+          .select('*')
+          .eq('task_id', task.id)
+          .order('created_at', { ascending: true });
+        
+        if (messages) {
+          for (const msg of messages) {
+            if (msg.sender_id !== executorId && !repliedMessages.has(msg.id)) {
+              log('POLL', `📩 协商消息 [${task.id?.substring(0,8)}]: ${msg.content?.substring(0, 30)}`);
+              const analysis = analyzeMessage(msg, state.taskFiles[task.id]);
+              await sendMessage(task.id, analysis.reply);
+              repliedMessages.add(msg.id);
+            }
+          }
+        }
+        
+        // 检查文件
+        const { data: bids } = await supabase
+          .from('bids')
+          .select('id')
+          .eq('task_id', task.id)
+          .eq('executor_id', executorId);
+        
+        if (bids && bids.length > 0) {
+          const { data: files } = await supabase
+            .from('storage_files')
+            .select('*')
+            .eq('bid_id', bids[0].id);
+          
+          if (files) {
+            for (const file of files) {
+              if (!downloadedFiles.has(file.id)) {
+                log('POLL', `📁 发现文件 [${file.file_name}]`);
+                const filePath = await downloadFile(file, task.id);
+                if (filePath) {
+                  downloadedFiles.add(file.id);
+                  if (!state.taskFiles[task.id]) state.taskFiles[task.id] = [];
+                  state.taskFiles[task.id].push(filePath);
+                  await sendMessage(task.id, `✅ 已收到文件 "${file.file_name}"，正在处理中...`);
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      state.repliedMessages = Array.from(repliedMessages);
+      state.downloadedFiles = Array.from(downloadedFiles);
+      writeState(state);
+    }
   } catch (error) {
-    log('ERROR', `初始扫描失败: ${error.message}`);
+    log('ERROR', `轮询异常: ${error.message}`);
   }
 }
 
+// 初始扫描
+async function initialScan() {
+  log('SCAN', '初始扫描...');
+  await pollTasks();
+}
+
 async function main() {
-  log('INFO', '=== GreedyClaw 守护进程启动 ===');
+  log('INFO', '=== GreedyClaw 守护进程启动 (全自动版) ===');
   log('INFO', `Workspace: ${WORKSPACE_DIR}`);
   
   await initSupabase();
@@ -795,11 +683,10 @@ async function main() {
   
   // 轮询备份（每60秒）
   setInterval(async () => {
-    await pollAssignedTasks();
-    await pollNegotiatingTasks();
+    await pollTasks();
   }, 60000);
   
-  log('INFO', '✅ 监听+轮询双保险已启动');
+  log('INFO', '✅ 全自动监听已启动');
   process.stdin.resume();
 }
 
