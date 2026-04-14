@@ -13,6 +13,25 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname, '../../..');
 
+// 加载 .env 文件
+function loadEnv() {
+  const envPath = path.join(__dirname, '..', '.env');
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        const [key, ...valueParts] = trimmed.split('=');
+        const value = valueParts.join('=').trim();
+        if (key && value && !process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    });
+  }
+}
+loadEnv();
+
 // 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
 const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL;
@@ -492,6 +511,213 @@ function setupRealtimeListeners() {
         }
       })
     .subscribe((status) => log('REALTIME', `UPDATE: ${status}`));
+  
+  // INSERT: 新消息（买方对话）
+  supabase.channel('task-messages')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'task_messages' },
+      async (payload) => {
+        try {
+          const msg = payload.new;
+          // 只处理发送给我（executor）的消息
+          if (msg.sender_id !== executorId) {
+            log('MESSAGE', `📩 收到消息 [${msg.task_id?.substring(0,8)}]: ${msg.content?.substring(0, 50)}`);
+            // 写入通知文件，让主进程处理
+            const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
+            fs.writeFileSync(notifyFile, JSON.stringify({
+              type: 'NEW_MESSAGE',
+              task_id: msg.task_id,
+              message_id: msg.id,
+              sender_id: msg.sender_id,
+              content: msg.content,
+              created_at: msg.created_at
+            }, null, 2));
+          }
+        } catch (error) {
+          log('ERROR', `处理消息失败: ${error.message}`);
+        }
+      })
+    .subscribe((status) => log('REALTIME', `MESSAGES: ${status}`));
+  
+  // INSERT: 新文件上传
+  supabase.channel('storage-files')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'storage_files' },
+      async (payload) => {
+        try {
+          const file = payload.new;
+          // 查询这个文件关联的 bid 是否属于我
+          const { data: bid } = await supabase
+            .from('bids')
+            .select('task_id, executor_id')
+            .eq('id', file.bid_id)
+            .single();
+          
+          if (bid && bid.executor_id === executorId) {
+            log('FILE', `📁 新文件 [${file.file_name}] for task [${bid.task_id?.substring(0,8)}]`);
+            // 下载文件
+            await downloadFile(file, bid.task_id);
+          }
+        } catch (error) {
+          log('ERROR', `处理文件失败: ${error.message}`);
+        }
+      })
+    .subscribe((status) => log('REALTIME', `FILES: ${status}`));
+}
+
+// 下载文件
+async function downloadFile(fileRecord, taskId) {
+  try {
+    const bucket = 'task-deliveries';
+    const downloadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${fileRecord.storage_path}`;
+    
+    const resp = await fetch(downloadUrl, {
+      headers: { 
+        'Authorization': `Bearer ${token}`, 
+        'apikey': anonKey 
+      }
+    });
+    
+    if (resp.ok) {
+      const buffer = await resp.arrayBuffer();
+      const taskDir = path.join(WORKSPACE_DIR, 'greedyclaw-files', taskId.substring(0, 8));
+      if (!fs.existsSync(taskDir)) fs.mkdirSync(taskDir, { recursive: true });
+      
+      const filePath = path.join(taskDir, fileRecord.file_name);
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      
+      log('DOWNLOAD', `✅ 文件已下载: ${filePath}`);
+      
+      // 写入通知文件
+      const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
+      fs.writeFileSync(notifyFile, JSON.stringify({
+        type: 'NEW_FILE',
+        task_id: taskId,
+        file_path: filePath,
+        file_name: fileRecord.file_name,
+        file_size: fileRecord.file_size
+      }, null, 2));
+      
+      return filePath;
+    } else {
+      log('ERROR', `下载失败: ${resp.status}`);
+      return null;
+    }
+  } catch (error) {
+    log('ERROR', `下载文件异常: ${error.message}`);
+    return null;
+  }
+}
+
+// 查询并下载任务的文件
+async function fetchTaskFiles(taskId) {
+  try {
+    // 查询我的 bid
+    const { data: bids } = await supabase
+      .from('bids')
+      .select('id')
+      .eq('task_id', taskId)
+      .eq('executor_id', executorId);
+    
+    if (!bids || bids.length === 0) return [];
+    
+    const bidId = bids[0].id;
+    
+    // 查询文件
+    const { data: files } = await supabase
+      .from('storage_files')
+      .select('*')
+      .eq('bid_id', bidId);
+    
+    if (!files || files.length === 0) return [];
+    
+    const downloadedFiles = [];
+    for (const file of files) {
+      const filePath = await downloadFile(file, taskId);
+      if (filePath) downloadedFiles.push(filePath);
+    }
+    
+    return downloadedFiles;
+  } catch (error) {
+    log('ERROR', `查询文件失败: ${error.message}`);
+    return [];
+  }
+}
+
+// 轮询检查 NEGOTIATING 任务的消息和文件
+async function pollNegotiatingTasks() {
+  try {
+    // 查询我中标但还在协商中的任务
+    const { data: tasks, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('executor_id', executorId)
+      .eq('status', 'NEGOTIATING');
+
+    if (error) {
+      log('ERROR', `轮询协商任务失败: ${error.message}`);
+      return;
+    }
+    
+    const state = readState();
+    const downloadedFiles = new Set(state.downloadedFiles || []);
+    
+    for (const task of tasks) {
+      // 查询该任务的消息
+      const { data: messages, error: msgError } = await supabase
+        .from('task_messages')
+        .select('*')
+        .eq('task_id', task.id)
+        .order('created_at', { ascending: true });
+      
+      if (msgError || !messages) continue;
+      
+      // 检查是否有未读消息（发送者不是我）
+      const unreadMsgs = messages.filter(m => m.sender_id !== executorId);
+      if (unreadMsgs.length > 0) {
+        const lastMsg = unreadMsgs[unreadMsgs.length - 1];
+        log('MESSAGE', `📩 协商消息 [${task.id?.substring(0,8)}]: ${lastMsg.content?.substring(0, 50)}`);
+        // 写入通知文件
+        const notifyFile = path.join(WORKSPACE_DIR, 'scripts/greedyclaw-notify.json');
+        fs.writeFileSync(notifyFile, JSON.stringify({
+          type: 'NEGOTIATING_MESSAGE',
+          task_id: task.id,
+          messages: unreadMsgs
+        }, null, 2));
+      }
+      
+      // 检查并下载文件
+      const { data: bids } = await supabase
+        .from('bids')
+        .select('id')
+        .eq('task_id', task.id)
+        .eq('executor_id', executorId);
+      
+      if (bids && bids.length > 0) {
+        const bidId = bids[0].id;
+        const { data: files } = await supabase
+          .from('storage_files')
+          .select('*')
+          .eq('bid_id', bidId);
+        
+        if (files) {
+          for (const file of files) {
+            if (!downloadedFiles.has(file.id)) {
+              log('FILE', `📁 发现文件 [${file.file_name}]`);
+              const filePath = await downloadFile(file, task.id);
+              if (filePath) {
+                downloadedFiles.add(file.id);
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // 更新状态
+    state.downloadedFiles = Array.from(downloadedFiles);
+    writeState(state);
+  } catch (error) {
+    log('ERROR', `轮询协商任务异常: ${error.message}`);
+  }
 }
 
 // 轮询检查（作为 Realtime 备份）
@@ -552,6 +778,8 @@ async function initialScan() {
     
     // 扫描已分配任务并执行
     await pollAssignedTasks();
+    // 扫描协商中的任务
+    await pollNegotiatingTasks();
   } catch (error) {
     log('ERROR', `初始扫描失败: ${error.message}`);
   }
@@ -568,6 +796,7 @@ async function main() {
   // 轮询备份（每60秒）
   setInterval(async () => {
     await pollAssignedTasks();
+    await pollNegotiatingTasks();
   }, 60000);
   
   log('INFO', '✅ 监听+轮询双保险已启动');

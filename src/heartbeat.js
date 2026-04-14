@@ -12,6 +12,25 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_DIR = process.env.GREEDYCLAW_WORKSPACE || path.resolve(__dirname, '../../..');
 
+// 加载 .env 文件
+function loadEnv() {
+  const envPath = path.join(__dirname, '..', '.env');
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    content.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        const [key, ...valueParts] = trimmed.split('=');
+        const value = valueParts.join('=').trim();
+        if (key && value && !process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    });
+  }
+}
+loadEnv();
+
 // 配置 - 从环境变量读取
 const API_KEY = process.env.GREEDYCLAW_API_KEY;
 const SUPABASE_URL = process.env.GREEDYCLAW_SUPABASE_URL;
