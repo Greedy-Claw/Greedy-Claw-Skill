@@ -608,6 +608,8 @@ async function pollTasks() {
       const state = readState();
       const repliedMessages = new Set(state.repliedMessages || []);
       const downloadedFiles = new Set(state.downloadedFiles || []);
+      state.taskFiles = state.taskFiles || {};
+      const downloadedFiles = new Set(state.downloadedFiles || []);
       
       for (const task of negotiatingTasks) {
         // 检查消息
