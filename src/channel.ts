@@ -40,10 +40,27 @@ export type ResolvedAccount = {
 
 /**
  * 从配置中获取 GreedyClaw section
+ * 优先从 plugins.entries.greedyclaw.config 读取，兼容旧路径 channels.greedyclaw
  */
 function getSection(cfg: OpenClawConfig): GreedyClawSection {
-  const channels = cfg.channels as Record<string, GreedyClawSection> | undefined;
-  return channels?.["greedyclaw"] ?? {};
+    // cfg 是 OpenClawConfig API 对象，需要调用 loadConfig() 获取实际配置
+    let actualConfig = cfg as Record<string, unknown>;
+    if (typeof (cfg as Record<string, unknown>)?.loadConfig === 'function') {
+        try {
+            actualConfig = (cfg as { loadConfig: () => Record<string, unknown> }).loadConfig();
+        } catch {
+            // 忽略错误，使用原始 cfg
+        }
+    }
+    // 优先从 plugins.entries.greedyclaw.config 读取
+    const plugins = actualConfig.plugins as { entries?: Record<string, { config?: GreedyClawSection }> } | undefined;
+    const pluginConfig = plugins?.entries?.greedyclaw?.config;
+    if (pluginConfig) {
+        return pluginConfig;
+    }
+    // 兼容旧配置路径 channels.greedyclaw
+    const channels = actualConfig.channels as Record<string, GreedyClawSection> | undefined;
+    return channels?.["greedyclaw"] ?? {};
 }
 
 /**

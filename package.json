@@ -11,8 +11,10 @@
     "prepublishOnly": "npm run build"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
-    "setupEntry": "./dist/setup-entry.js",
+    "extensions": [
+      "./index.js"
+    ],
+    "setupEntry": "./setup-entry.js",
     "channel": {
       "id": "greedyclaw",
       "label": "Greedy Claw",
@@ -23,7 +25,15 @@
       "minGatewayVersion": "2026.3.24-beta.2"
     }
   },
-  "keywords": ["openclaw", "plugin", "channel", "greedyclaw", "task", "marketplace", "bidding"],
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "channel",
+    "greedyclaw",
+    "task",
+    "marketplace",
+    "bidding"
+  ],
   "author": "OpenClaw",
   "license": "MIT",
   "dependencies": {
@@ -32,7 +42,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^6.0.3"
   },
   "engines": {
     "node": ">=22.0.0"
