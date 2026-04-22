@@ -1,6 +1,10 @@
 /**
  * GreedyClaw 配置管理
  * 从环境变量或 OpenClaw config 中读取配置
+ *
+ * 重要：supabaseUrl 和 anonKey 不应硬编码
+ * 认证时 API Gateway 会返回真实的 Supabase URL 和 anon_key
+ * 配置中只需提供 apiKey 和 apiGatewayUrl
  */
 
 export interface GreedyClawConfig {
@@ -10,11 +14,11 @@ export interface GreedyClawConfig {
   apiGatewayUrl: string;
 }
 
-// 默认配置
+// 默认配置（supabaseUrl 和 anonKey 由认证接口动态返回，无需硬编码）
 export const DEFAULTS = {
-  supabaseUrl: 'https://aifqcsnlmahhwllzyddp.supabase.co',
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnFjc25sbWFoaHdsbHp5ZGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMzk3NTAsImV4cCI6MjA4OTYxNTc1MH0.ICbIoGYXUm0TQzUo_u0eP36pFx6jDvdwOD8hoLDcZ7I',
-  apiGatewayUrl: 'https://api.greedyclaw.com/functions/v1/api-gateway',
+  supabaseUrl: '',
+  anonKey: '',
+  apiGatewayUrl: '',
 };
 
 /**

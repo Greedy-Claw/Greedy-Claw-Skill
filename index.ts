@@ -86,10 +86,10 @@ export default defineChannelPluginEntry({
         const inboundHandler = createInboundHandler(client, executorId, api);
         await inboundHandler.start();
 
-        // 启动 Heartbeat 服务
+        // 启动 Heartbeat 服务（使用认证后返回的真实 Supabase URL）
         const heartbeatService = createHeartbeatService(
-          config.supabaseUrl,
-          config.anonKey,
+          authResult.supabaseUrl,
+          authResult.anonKey,
           () => clientManager.getAccessToken(),
           () => clientManager.getUserId(),
         );

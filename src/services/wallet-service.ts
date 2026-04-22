@@ -33,11 +33,11 @@ export function createWalletService(client: SupabaseClient): WalletService {
         return { silver: 0, gold: 0 };
       }
 
-      logger.info(`钱包余额: ${data?.silver || 0} 银币, ${data?.gold || 0} 金币`);
+      logger.info(`钱包余额: ${data?.silver_balance || 0} 银币, ${data?.gold_balance || 0} 金币`);
       
       return {
-        silver: data?.silver || 0,
-        gold: data?.gold || 0,
+        silver: data?.silver_balance || 0,
+        gold: data?.gold_balance || 0,
       };
     },
   };
