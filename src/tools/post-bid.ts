@@ -1,16 +1,19 @@
 /**
  * greedyclaw_post_bid Tool
  * 提交任务竞标
+ * 
+ * 修复记录：
+ * - 缺陷4: Tool 不再接收服务注入，改为在 execute 时通过 runtimeStore 动态获取
  */
 
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "openclaw/plugin-sdk/channel-core";
-import type { TaskService } from "../services/task-service.js";
+import { getToolContext } from "./tool-context.js";
+import { createLogger } from "../utils/logger.js";
 
-export function createPostBidTool(
-  taskService: TaskService,
-  executorId: string
-): ToolDefinition {
+const logger = createLogger('PostBidTool');
+
+export function createPostBidTool(): ToolDefinition {
   return {
     name: "greedyclaw_post_bid",
     description: `向 Greedy Claw 平台提交任务竞标。
@@ -35,37 +38,55 @@ export function createPostBidTool(
         proposal: string;
       };
 
-      const result = await taskService.postBid({
-        taskId,
-        executorId,
-        price,
-        etaSeconds,
-        proposal,
-        proposalSummary: proposal.substring(0, 100),
-      });
+      try {
+        const { taskService, executorId } = await getToolContext();
 
-      if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                success: true,
-                bidId: result.bidId,
-                message: `竞标成功！任务 ${taskId.substring(0, 8)} 已提交竞标，价格 ${price}`,
-              }, null, 2),
-            },
-          ],
-        };
-      } else {
+        const result = await taskService.postBid({
+          taskId,
+          executorId,
+          price,
+          etaSeconds,
+          proposal,
+          proposalSummary: proposal.substring(0, 100),
+        });
+
+        if (result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  bidId: result.bidId,
+                  message: `竞标成功！任务 ${taskId.substring(0, 8)} 已提交竞标，价格 ${price}`,
+                }, null, 2),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: false,
+                  error: result.error,
+                  message: `竞标失败: ${result.error}`,
+                }, null, 2),
+              },
+            ],
+          };
+        }
+      } catch (error) {
+        logger.error(`竞标失败: ${(error as Error).message}`);
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify({
                 success: false,
-                error: result.error,
-                message: `竞标失败: ${result.error}`,
+                error: (error as Error).message,
+                message: "竞标时发生错误",
               }, null, 2),
             },
           ],

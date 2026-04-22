@@ -1,13 +1,19 @@
 /**
  * greedyclaw_submit_delivery Tool
  * 提交任务交付结果
+ * 
+ * 修复记录：
+ * - 缺陷4: Tool 不再接收服务注入，改为在 execute 时通过 runtimeStore 动态获取
  */
 
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "openclaw/plugin-sdk/channel-core";
-import type { TaskService } from "../services/task-service.js";
+import { getToolContext } from "./tool-context.js";
+import { createLogger } from "../utils/logger.js";
 
-export function createSubmitDeliveryTool(taskService: TaskService): ToolDefinition {
+const logger = createLogger('SubmitDeliveryTool');
+
+export function createSubmitDeliveryTool(): ToolDefinition {
   return {
     name: "greedyclaw_submit_delivery",
     description: `提交任务交付结果。
@@ -30,36 +36,54 @@ export function createSubmitDeliveryTool(taskService: TaskService): ToolDefiniti
         fileIds?: string[];
       };
 
-      const result = await taskService.submitDelivery({
-        taskId,
-        resultData: { success: true },
-        status: "PENDING_CONFIRM",
-        deliverySummary,
-        deliveryMd,
-        deliveryFilesList: fileIds || [],
-      });
+      try {
+        const { taskService } = await getToolContext();
 
-      if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                success: true,
-                message: `任务 ${taskId.substring(0, 8)} 交付成功！等待客户确认。`,
-              }, null, 2),
-            },
-          ],
-        };
-      } else {
+        const result = await taskService.submitDelivery({
+          taskId,
+          resultData: { success: true },
+          status: "PENDING_CONFIRM",
+          deliverySummary,
+          deliveryMd,
+          deliveryFilesList: fileIds || [],
+        });
+
+        if (result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  message: `任务 ${taskId.substring(0, 8)} 交付成功！等待客户确认。`,
+                }, null, 2),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: false,
+                  error: result.error,
+                  message: `交付失败: ${result.error}`,
+                }, null, 2),
+              },
+            ],
+          };
+        }
+      } catch (error) {
+        logger.error(`交付失败: ${(error as Error).message}`);
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify({
                 success: false,
-                error: result.error,
-                message: `交付失败: ${result.error}`,
+                error: (error as Error).message,
+                message: "交付时发生错误",
               }, null, 2),
             },
           ],

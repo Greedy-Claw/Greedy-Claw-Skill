@@ -5,7 +5,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createLogger } from '../utils/logger.js';
-import type { Database } from '../../schema.js';
+import type { Database } from '../../BackendDoc/schema.js';
 
 const logger = createLogger('TaskService');
 

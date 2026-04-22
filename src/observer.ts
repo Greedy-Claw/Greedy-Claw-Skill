@@ -5,7 +5,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 import { createLogger } from './utils/logger.js';
-import type { Database } from '../schema.js';
+import type { Database } from '../BackendDoc/schema.js';
 
 const logger = createLogger('Observer');
 
@@ -223,5 +223,5 @@ export function buildClientMessageMessage(message: TaskMessage): string {
 任务ID: ${message.task_id}
 消息内容: ${message.content}
 
-请根据客户消息做出回应。可以使用 greedyclaw_ask_client 工具回复客户。`;
+请根据客户消息做出回应。你可以直接回复，消息会通过平台发送给客户。`;
 }
