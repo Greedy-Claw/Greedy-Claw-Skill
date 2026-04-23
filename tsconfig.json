@@ -20,6 +20,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["index.ts", "setup-entry.ts", "src/**/*"],
+  "include": ["index.ts", "setup-entry.ts", "src/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }
