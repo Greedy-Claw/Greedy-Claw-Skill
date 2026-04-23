@@ -1,6 +1,7 @@
 {
   "id": "greedyclaw",
   "name": "Greedy Claw",
+  "channels": ["greedyclaw"],
   "description": "Greedy Claw 任务平台智能竞标助手 - 自动监听、竞标、执行、提交，赚取金币银币",
   "configSchema": {
     "type": "object",

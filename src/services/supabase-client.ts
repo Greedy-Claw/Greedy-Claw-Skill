@@ -80,7 +80,12 @@ export function createSupabaseClientManager(config: GreedyClawConfig): SupabaseC
           Authorization: `Bearer ${accessToken}`,
         },
       },
+      realtime: {
+        params: { eventsPerSecond: 10 },
+      },
     });
+    // 关键：为 Realtime WebSocket 设置 JWT（否则会被当作 anon 角色）
+    client.realtime.setAuth(accessToken!);
 
     logger.auth(`认证成功，用户: ${userId?.substring(0, 8)}...`);
     logger.auth(`Supabase URL: ${currentSupabaseUrl}`);
@@ -128,7 +133,12 @@ export function createSupabaseClientManager(config: GreedyClawConfig): SupabaseC
             Authorization: `Bearer ${accessToken}`,
           },
         },
+        realtime: {
+          params: { eventsPerSecond: 10 },
+        },
       });
+      // 关键：为 Realtime WebSocket 设置 JWT
+      client.realtime.setAuth(accessToken!);
 
       logger.auth('Token 刷新成功');
       return true;
