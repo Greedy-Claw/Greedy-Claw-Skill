@@ -6,11 +6,6 @@
  * 1. 定义 Channel Plugin（通过 greedyclawPlugin）
  * 2. 在 registerFull 中注册 Agent 可调用的 Tools 和后台服务
  * 3. 通过 runtimeStore 在 outbound handlers 中访问运行时上下文
- *
- * 修复记录：
- * - 缺陷1: registerFull 现在正确调用初始化逻辑
- * - 缺陷2: 删除 ask-client Tool，outbound.sendText 在 channel.ts 中实现
- * - 缺陷4: Tool 通过 runtimeStore 动态获取账户上下文
  */
 
 import { defineChannelPluginEntry, type PluginApi } from "openclaw/plugin-sdk/channel-core";
@@ -30,79 +25,92 @@ const logger = createLogger('Entry');
 // 初始化 Runtime Store（必须在 defineChannelPluginEntry 之前）
 initRuntimeStore();
 
+// 服务单例，防止 registerFull 重复调用时创建多个实例
+let inboundHandler: ReturnType<typeof createInboundHandler> | null = null;
+let heartbeatService: ReturnType<typeof createHeartbeatService> | null = null;
+let clientManager: ReturnType<typeof createSupabaseClientManager> | null = null;
+
 export default defineChannelPluginEntry({
   id: "greedyclaw",
   name: "Greedy Claw",
   description: "Greedy Claw 任务平台智能竞标助手 - 自动监听、竞标、执行、提交",
   plugin: greedyclawPlugin,
 
-  // 缺陷4修复：设置 runtime 引用，供 outbound handlers 和 Tool execute 使用
+  // 设置 runtime 引用
   setRuntime: (runtime) => {
     getRuntimeStore().setRuntime(runtime);
-    logger.info('Runtime 已设置');
   },
 
-  // 缺陷1修复：registerFull 正确调用初始化逻辑
   registerFull(api: PluginApi) {
     logger.info('Greedy Claw Plugin 全模式注册...');
 
-    // 1. 从 runtimeStore 获取配置并解析账户
     const runtime = getRuntimeStore().getRuntime();
     const account = greedyclawPlugin.setup.resolveAccount(runtime.config);
     const config = getAccountConfig(account);
 
-    // 2. 创建 Supabase 客户端管理器并认证
-    const clientManager = createSupabaseClientManager({
-      apiKey: config.apiKey,
-      supabaseUrl: config.supabaseUrl,
-      anonKey: config.anonKey,
-      apiGatewayUrl: config.apiGatewayUrl,
-    });
+    // 只创建一次 clientManager
+    if (!clientManager) {
+      clientManager = createSupabaseClientManager({
+        apiKey: config.apiKey,
+        supabaseUrl: config.supabaseUrl,
+        anonKey: config.anonKey,
+        apiGatewayUrl: config.apiGatewayUrl,
+      });
+    }
 
-    // 3. 注册业务 Tools（缺陷4修复：Tool 内部通过 runtimeStore 动态获取账户）
+    // 注册 Tools（幂等，重复注册会被覆盖）
     api.registerTool(createGetBalanceTool());
     api.registerTool(createPostBidTool());
     api.registerTool(createSubmitDeliveryTool());
     api.registerTool(createGetTaskContextTool());
 
-    logger.info('Agent 业务 Tools 已注册');
-
-    // 4. 注册后台服务（Observer + Heartbeat）
+    // 注册空壳 service
     api.registerService({
       id: 'greedyclaw-background',
-      start: async () => {
-        // 认证
-        const authResult = await clientManager.authenticate();
-        const executorId = authResult.userId;
-        const client = clientManager.getClient();
-
-        if (!client) {
-          throw new Error('认证失败：无法获取 Supabase 客户端');
-        }
-
-        logger.info(`认证成功，executor: ${executorId?.substring(0, 8)}...`);
-
-        // 启动 Inbound 处理器（Observer → 标准 Inbound Pipeline）
-        const inboundHandler = createInboundHandler(client, executorId, api);
-        await inboundHandler.start();
-
-        // 启动 Heartbeat 服务（使用认证后返回的真实 Supabase URL）
-        const heartbeatService = createHeartbeatService(
-          authResult.supabaseUrl,
-          authResult.anonKey,
-          () => clientManager.getAccessToken(),
-          () => clientManager.getUserId(),
-        );
-        heartbeatService.start();
-
-        logger.info('后台服务已启动（Observer + Heartbeat）');
-      },
-      stop: () => {
-        // 停止逻辑由 InboundHandler 和 HeartbeatService 内部管理
-        logger.info('后台服务已停止');
-      },
+      start: async () => {},
+      stop: () => {},
     });
 
-    logger.info('Greedy Claw Plugin 全模式注册完成');
+    // 只启动一次服务
+    if (!inboundHandler) {
+      startServices(api).catch(err => {
+        logger.error(`启动服务失败: ${err.message}`);
+      });
+    }
+
+    logger.info('Greedy Claw Plugin 注册完成');
   },
 });
+
+async function startServices(api: PluginApi) {
+  const authResult = await clientManager!.authenticate();
+  const executorId = authResult.userId;
+  const client = clientManager!.getClient();
+
+  if (!client) {
+    throw new Error('认证失败');
+  }
+
+  logger.info(`认证成功，executor: ${executorId?.substring(0, 8)}...`);
+
+  // 启动 Inbound Handler（Observer Realtime）— 只创建一次
+  inboundHandler = createInboundHandler(
+    authResult.accessToken,
+    authResult.supabaseUrl,
+    authResult.anonKey,
+    executorId,
+    api
+  );
+  await inboundHandler.start();
+
+  // 启动 Heartbeat — 只创建一次
+  heartbeatService = createHeartbeatService(
+    authResult.supabaseUrl,
+    authResult.anonKey,
+    () => clientManager!.getAccessToken(),
+    () => clientManager!.getUserId(),
+  );
+  heartbeatService.start();
+
+  logger.info('后台服务已启动');
+}

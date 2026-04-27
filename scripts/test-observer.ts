@@ -158,13 +158,18 @@ async function queryInitialData(client: SupabaseClient, executorId: string) {
     }
   }
 
-  // 3. 查询我能看到的消息
-  if (myTasks && myTasks.length > 0) {
-    const taskIds = myTasks.map(t => t.id);
+  // 3. 查询我能看到的消息 (通过 bids 关联)
+  const { data: myBids } = await client
+    .from('bids')
+    .select('id, task_id')
+    .eq('executor_id', executorId);
+
+  if (myBids && myBids.length > 0) {
+    const bidIds = myBids.map(b => b.id);
     const { data: messages, error: msgErr } = await client
-      .from('task_messages')
+      .from('bids_messages')
       .select('*')
-      .in('task_id', taskIds)
+      .in('bid_id', bidIds)
       .order('created_at', { ascending: false })
       .limit(20);
 
@@ -174,12 +179,12 @@ async function queryInitialData(client: SupabaseClient, executorId: string) {
       console.log(`💬 我的消息 (${messages?.length || 0}):`);
       for (const m of messages || []) {
         const isMine = m.sender_id === executorId;
-        console.log(`   ${isMine ? '→' : '←'} [${m.task_id.substring(0, 8)}] ${(m.content || '').substring(0, 50)} (${m.created_at})`);
+        console.log(`   ${isMine ? '→' : '←'} [bid: ${m.bid_id.substring(0, 8)}] ${(m.content || '').substring(0, 50)} (${m.created_at})`);
       }
     }
   }
 
-  // 4. 查询 NEGOTIATING 任务的消息
+  // 4. 查询 NEGOTIATING 任务的消息 (通过 bids 关联)
   const { data: negTasks } = await client
     .from('tasks')
     .select('id')
@@ -188,20 +193,30 @@ async function queryInitialData(client: SupabaseClient, executorId: string) {
 
   if (negTasks && negTasks.length > 0) {
     const taskIds = negTasks.map(t => t.id);
-    const { data: negMessages, error: negMsgErr } = await client
-      .from('task_messages')
-      .select('*')
+    // 获取这些任务的 bids
+    const { data: negBids } = await client
+      .from('bids')
+      .select('id')
       .in('task_id', taskIds)
-      .neq('sender_id', executorId)
-      .order('created_at', { ascending: false })
-      .limit(10);
+      .eq('executor_id', executorId);
 
-    if (negMsgErr) {
-      console.log(`❌ 查询 NEGOTIATING 消息失败: ${negMsgErr.message}`);
-    } else {
-      console.log(`💬 NEGOTIATING 任务的未读消息 (${negMessages?.length || 0}):`);
-      for (const m of negMessages || []) {
-        console.log(`   ← [${m.task_id.substring(0, 8)}] ${(m.content || '').substring(0, 60)}`);
+    if (negBids && negBids.length > 0) {
+      const bidIds = negBids.map(b => b.id);
+      const { data: negMessages, error: negMsgErr } = await client
+        .from('bids_messages')
+        .select('*')
+        .in('bid_id', bidIds)
+        .neq('sender_id', executorId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (negMsgErr) {
+        console.log(`❌ 查询 NEGOTIATING 消息失败: ${negMsgErr.message}`);
+      } else {
+        console.log(`💬 NEGOTIATING 任务的未读消息 (${negMessages?.length || 0}):`);
+        for (const m of negMessages || []) {
+          console.log(`   ← [bid: ${m.bid_id.substring(0, 8)}] ${(m.content || '').substring(0, 60)}`);
+        }
       }
     }
   }
@@ -277,21 +292,21 @@ function startObserver(client: SupabaseClient, executorId: string) {
       }
     });
 
-  // 3. 监听新消息 ★★★ 重点测试 ★★★
+  // 3. 监听新消息 (bids_messages) ★★★ 重点测试 ★★★
   const messagesChannel = client
-    .channel('test-task-messages')
+    .channel('test-bids-messages')
     .on(
       'postgres_changes',
       {
         event: 'INSERT',
         schema: 'public',
-        table: 'task_messages',
+        table: 'bids_messages',
       },
       (payload) => {
         const msg = payload.new as Record<string, unknown>;
         console.log('\n💬 [Realtime-新消息] ======================');
         console.log(`  消息 ID:     ${msg.id}`);
-        console.log(`  任务 ID:     ${msg.task_id}`);
+        console.log(`  Bid ID:      ${msg.bid_id}`);
         console.log(`  发送者 ID:   ${msg.sender_id}`);
         console.log(`  是否自己:    ${msg.sender_id === executorId}`);
         console.log(`  内容:        ${(msg.content as string)?.substring(0, 200)}`);
@@ -310,9 +325,9 @@ function startObserver(client: SupabaseClient, executorId: string) {
       }
     )
     .subscribe((status, err) => {
-      console.log(`[task-messages] channel 状态: ${status}${err ? ` error: ${err.message}` : ''}`);
+      console.log(`[bids-messages] channel 状态: ${status}${err ? ` error: ${err.message}` : ''}`);
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        console.error(`❌ [task-messages] 订阅异常: ${status}`);
+        console.error(`❌ [bids-messages] 订阅异常: ${status}`);
       }
     });
 
@@ -345,14 +360,14 @@ function startObserver(client: SupabaseClient, executorId: string) {
         }
       }
 
-      // 轮询 NEGOTIATING 任务的消息
+      // 轮询 NEGOTIATING 任务的消息 (通过 bids 关联)
       const { data: negotiatingTasks, error: negErr } = await client
         .from('tasks')
         .select('id')
         .eq('executor_id', executorId)
         .eq('status', 'NEGOTIATING');
 
-      // 轮询 ASSIGNED/RUNNING 任务的消息
+      // 轮询 ASSIGNED/RUNNING 任务的消息 (通过 bids 关联)
       const { data: activeTasks, error: activeErr } = await client
         .from('tasks')
         .select('id')
@@ -365,26 +380,36 @@ function startObserver(client: SupabaseClient, executorId: string) {
       ];
 
       if (allTaskIds.length > 0) {
-        const { data: newMessages, error: msgErr } = await client
-          .from('task_messages')
-          .select('*')
+        // 获取这些任务的 bids
+        const { data: taskBids } = await client
+          .from('bids')
+          .select('id')
           .in('task_id', allTaskIds)
-          .neq('sender_id', executorId)
-          .order('created_at', { ascending: false })
-          .limit(10);
+          .eq('executor_id', executorId);
 
-        if (msgErr) {
-          console.log(`[轮询] 消息查询失败: ${msgErr.message}`);
-        } else if (newMessages) {
-          for (const msg of newMessages) {
-            if (!notifiedMessages.has(msg.id)) {
-              notifiedMessages.add(msg.id);
-              console.log('\n💬 [轮询-新消息] ============================');
-              console.log(`  消息 ID:     ${msg.id}`);
-              console.log(`  任务 ID:     ${msg.task_id}`);
-              console.log(`  发送者 ID:   ${msg.sender_id}`);
-              console.log(`  内容:        ${msg.content?.substring(0, 200)}`);
-              console.log('=============================================\n');
+        if (taskBids && taskBids.length > 0) {
+          const bidIds = taskBids.map(b => b.id);
+          const { data: newMessages, error: msgErr } = await client
+            .from('bids_messages')
+            .select('*')
+            .in('bid_id', bidIds)
+            .neq('sender_id', executorId)
+            .order('created_at', { ascending: false })
+            .limit(10);
+
+          if (msgErr) {
+            console.log(`[轮询] 消息查询失败: ${msgErr.message}`);
+          } else if (newMessages) {
+            for (const msg of newMessages) {
+              if (!notifiedMessages.has(msg.id)) {
+                notifiedMessages.add(msg.id);
+                console.log('\n💬 [轮询-新消息] ============================');
+                console.log(`  消息 ID:     ${msg.id}`);
+                console.log(`  Bid ID:      ${msg.bid_id}`);
+                console.log(`  发送者 ID:   ${msg.sender_id}`);
+                console.log(`  内容:        ${msg.content?.substring(0, 200)}`);
+                console.log('=============================================\n');
+              }
             }
           }
         }

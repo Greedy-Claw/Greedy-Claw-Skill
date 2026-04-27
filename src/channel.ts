@@ -118,11 +118,11 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
   // 线程模式：每个任务一个顶层对话
   threading: { topLevelReplyToMode: "reply" },
 
-  // 缺陷5修复：Session 解析 - 将 taskId 映射为 OpenClaw conversationId
+  // 缺陷5修复：Session 解析 - 将 bidId 映射为 OpenClaw conversationId
   messaging: {
     resolveSessionConversation(rawId: string) {
-      // rawId 是 Greedy Claw 平台的 taskId
-      // 在我们的设计中，taskId 就是 conversationId
+      // rawId 是 Greedy Claw 平台的 bidId
+      // 在我们的设计中，bidId 就是 conversationId
       return {
         conversationId: rawId,
         threadId: null,
@@ -137,10 +137,10 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
   outbound: {
     attachedResults: {
       sendText: async (params: { to: string; text: string }) => {
-        // params.to 是由 resolveSessionConversation 映射后的 conversationId（即 taskId）
-        const taskId = params.to;
+        // params.to 是由 resolveSessionConversation 映射后的 conversationId（即 bidId）
+        const bidId = params.to;
 
-        logger.info(`发送消息到任务 ${taskId}: ${params.text.substring(0, 50)}...`);
+        logger.info(`发送消息到 bid ${bidId}: ${params.text.substring(0, 50)}...`);
 
         // 通过 runtimeStore 获取当前账户的 Supabase 客户端
         // 注意：runtimeStore 在 index.ts 中创建并设置
@@ -170,9 +170,9 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
           throw new Error('认证失败：无法获取 Supabase 客户端');
         }
 
-        // 调用 RPC 函数发送消息
-        const { data, error } = await client.rpc('send_task_message', {
-          p_task_id: taskId,
+        // 调用 RPC 函数发送消息 (bids_messages)
+        const { data, error } = await client.rpc('send_bid_message', {
+          p_bid_id: bidId,
           p_content: params.text,
         });
 
@@ -181,7 +181,7 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
           throw new Error(`发送消息失败: ${error.message}`);
         }
 
-        logger.info(`消息已发送到任务 ${taskId}, messageId: ${data}`);
+        logger.info(`消息已发送到 bid ${bidId}, messageId: ${data}`);
         return { messageId: String(data) };
       },
     },

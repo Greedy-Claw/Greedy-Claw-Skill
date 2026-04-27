@@ -243,24 +243,29 @@ export function createTaskService(client: SupabaseClient): TaskService {
         return null;
       }
 
-      // 获取消息
-      const { data: messages } = await client
-        .from('task_messages')
-        .select('id, sender_id, content, created_at')
-        .eq('task_id', taskId)
-        .order('created_at', { ascending: true });
-
-      // 获取附件（通过 bids 关联）
+      // 获取 executor 的 bids（用于获取消息和附件）
       const { data: bids } = await client
         .from('bids')
         .select('id')
         .eq('task_id', taskId)
         .eq('executor_id', executorId);
 
+      let messages: Array<{ id: string; sender_id: string; content: string; created_at: string }> = [];
       let attachments: Array<{ id: string; file_name: string; storage_path: string }> = [];
-      
+
       if (bids && bids.length > 0) {
         const bidIds = bids.map(b => b.id);
+
+        // 获取 bids_messages（通过 bid_id 关联）
+        const { data: bidMessages } = await client
+          .from('bids_messages')
+          .select('id, sender_id, content, created_at')
+          .in('bid_id', bidIds)
+          .order('created_at', { ascending: true });
+        
+        messages = bidMessages || [];
+
+        // 获取附件
         const { data: files } = await client
           .from('storage_files')
           .select('id, file_name, storage_path')
@@ -271,7 +276,7 @@ export function createTaskService(client: SupabaseClient): TaskService {
 
       return {
         task,
-        messages: messages || [],
+        messages,
         attachments,
       };
     },

@@ -15,6 +15,7 @@ state/
 # Environment files
 .env
 .env.local
+*.env
 
 # IDE
 .vscode/
