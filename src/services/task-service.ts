@@ -46,6 +46,21 @@ export interface TaskContext {
   }>;
 }
 
+export interface BidContext {
+  task: Task;
+  messages: Array<{
+    id: string;
+    sender_id: string;
+    content: string;
+    created_at: string;
+  }>;
+  attachments: Array<{
+    id: string;
+    file_name: string;
+    storage_path: string;
+  }>;
+}
+
 export interface TaskService {
   getOpenTasks(): Promise<Task[]>;
   getTaskById(taskId: string): Promise<Task | null>;
@@ -56,6 +71,7 @@ export interface TaskService {
   submitDelivery(params: SubmitDeliveryParams): Promise<{ success: boolean; error?: string }>;
   updateTaskStatus(taskId: string, status: string): Promise<boolean>;
   getTaskContext(taskId: string, executorId: string): Promise<TaskContext | null>;
+  getBidContext(bidId: string, executorId: string): Promise<BidContext | null>;
 }
 
 /**
@@ -273,6 +289,65 @@ export function createTaskService(client: SupabaseClient): TaskService {
         
         attachments = files || [];
       }
+
+      return {
+        task,
+        messages,
+        attachments,
+      };
+    },
+
+    /**
+     * 获取竞标上下文（通过 bidId 获取）
+     * 用于磋商阶段获取对话历史
+     */
+    async getBidContext(bidId: string, executorId: string): Promise<BidContext | null> {
+      // 获取 bid 信息
+      const { data: bid, error: bidError } = await client
+        .from('bids')
+        .select('id, task_id, executor_id')
+        .eq('id', bidId)
+        .single();
+
+      if (bidError || !bid) {
+        logger.error(`获取竞标失败: ${bidError?.message}`);
+        return null;
+      }
+
+      // 权限检查：只有 bid 的 executor 可访问
+      if (bid.executor_id !== executorId) {
+        logger.error(`无权访问竞标 ${bidId}`);
+        return null;
+      }
+
+      // 获取任务
+      const { data: task, error: taskError } = await client
+        .from('tasks')
+        .select('*')
+        .eq('id', bid.task_id)
+        .single();
+
+      if (taskError || !task) {
+        logger.error(`获取任务失败: ${taskError?.message}`);
+        return null;
+      }
+
+      // 获取该 bid 的消息
+      const { data: bidMessages } = await client
+        .from('bids_messages')
+        .select('id, sender_id, content, created_at')
+        .eq('bid_id', bidId)
+        .order('created_at', { ascending: true });
+
+      const messages = bidMessages || [];
+
+      // 获取该 bid 的附件
+      const { data: files } = await client
+        .from('storage_files')
+        .select('id, file_name, storage_path')
+        .eq('bid_id', bidId);
+
+      const attachments = files || [];
 
       return {
         task,

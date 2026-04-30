@@ -9,6 +9,8 @@
     "build": "tsc && cp openclaw.plugin.json SKILL.md dist/",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:observer": "npx tsx scripts/test-observer.ts"
   },
   "openclaw": {
@@ -44,7 +46,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.0"
   },
   "engines": {
     "node": ">=22.0.0"

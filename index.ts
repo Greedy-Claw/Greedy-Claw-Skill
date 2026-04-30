@@ -13,11 +13,12 @@ import { greedyclawPlugin, getAccountConfig } from "./src/channel.js";
 import { initRuntimeStore, getRuntimeStore } from "./src/runtime-store.js";
 import { createSupabaseClientManager } from "./src/services/supabase-client.js";
 import { createHeartbeatService } from "./src/services/heartbeat-service.js";
-import { createInboundHandler } from "./src/inbound.js";
+import { createInboundHandler, createWebhookHandler, WEBHOOK_PATH } from "./src/inbound.js";
 import { createGetBalanceTool } from "./src/tools/get-balance.js";
 import { createPostBidTool } from "./src/tools/post-bid.js";
 import { createSubmitDeliveryTool } from "./src/tools/submit-delivery.js";
-import { createGetTaskContextTool } from "./src/tools/get-task-context.js";
+import { createGetTaskInfoTool } from "./src/tools/get-task-info.js";
+import { createGetBidContextTool } from "./src/tools/get-bid-context.js";
 import { createLogger } from "./src/utils/logger.js";
 
 const logger = createLogger('Entry');
@@ -62,7 +63,21 @@ export default defineChannelPluginEntry({
     api.registerTool(createGetBalanceTool());
     api.registerTool(createPostBidTool());
     api.registerTool(createSubmitDeliveryTool());
-    api.registerTool(createGetTaskContextTool());
+    api.registerTool(createGetTaskInfoTool());
+    api.registerTool(createGetBidContextTool());
+
+    // 注册 HTTP Webhook Route - 用于后台服务触发 Agent
+    // 参考：https://github.com/openclaw/openclaw/blob/main/docs/plugins/sdk-channel-plugins.md
+    // "The typical pattern is a webhook that verifies the request and dispatches it 
+    //  through your channel's inbound handler."
+    if (api.registerHttpRoute) {
+      api.registerHttpRoute({
+        path: WEBHOOK_PATH,
+        auth: 'plugin', // 使用 plugin 认证
+        handler: createWebhookHandler(api),
+      });
+      logger.info(`Webhook 已注册: ${WEBHOOK_PATH}`);
+    }
 
     // 注册空壳 service
     api.registerService({
@@ -73,7 +88,7 @@ export default defineChannelPluginEntry({
 
     // 只启动一次服务
     if (!inboundHandler) {
-      startServices(api).catch(err => {
+      startServices().catch(err => {
         logger.error(`启动服务失败: ${err.message}`);
       });
     }
@@ -82,7 +97,7 @@ export default defineChannelPluginEntry({
   },
 });
 
-async function startServices(api: PluginApi) {
+async function startServices() {
   const authResult = await clientManager!.authenticate();
   const executorId = authResult.userId;
   const client = clientManager!.getClient();
@@ -93,13 +108,18 @@ async function startServices(api: PluginApi) {
 
   logger.info(`认证成功，executor: ${executorId?.substring(0, 8)}...`);
 
+  // 构建 webhook URL（内部调用）
+  // 使用 Gateway 实际端口（从环境变量或默认 18789）
+  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || '18789';
+  const webhookUrl = `http://localhost:${gatewayPort}${WEBHOOK_PATH}`;
+
   // 启动 Inbound Handler（Observer Realtime）— 只创建一次
   inboundHandler = createInboundHandler(
     authResult.accessToken,
     authResult.supabaseUrl,
     authResult.anonKey,
     executorId,
-    api
+    webhookUrl  // 传入 webhook URL
   );
   await inboundHandler.start();
 

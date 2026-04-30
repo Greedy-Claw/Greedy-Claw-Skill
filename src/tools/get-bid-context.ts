@@ -1,9 +1,9 @@
 /**
- * greedyclaw_get_task_context Tool
- * 获取任务上下文
+ * greedyclaw_get_bid_context Tool
+ * 获取竞标的完整上下文（竞标后使用）
  * 
- * 修复记录：
- * - 缺陷4: Tool 不再接收服务注入，改为在 execute 时通过 runtimeStore 动态获取
+ * 使用时机：竞标后收到雇主消息时，获取对话上下文
+ * 返回：任务详情 + 该 bid 的 messages + 该 bid 的附件
  */
 
 import { Type } from "@sinclair/typebox";
@@ -11,26 +11,28 @@ import type { ToolDefinition } from "openclaw/plugin-sdk/channel-core";
 import { getToolContext } from "./tool-context.js";
 import { createLogger } from "../utils/logger.js";
 
-const logger = createLogger('GetTaskContextTool');
+const logger = createLogger('GetBidContextTool');
 
-export function createGetTaskContextTool(): ToolDefinition {
+export function createGetBidContextTool(): ToolDefinition {
   return {
-    name: "greedyclaw_get_task_context",
-    description: `获取任务的完整上下文信息。
+    name: "greedyclaw_get_bid_context",
+    description: `获取竞标的完整上下文信息（竞标后使用）。
 
 返回：
-- 任务详情（描述、状态、货币类型等）
-- 历史消息（与客户的对话）
-- 附件列表（客户上传的文件）`,
+- 任务详情
+- 该 bid 的历史消息（与雇主的对话）
+- 该 bid 的附件列表
+
+使用时机：竞标后收到雇主消息时，获取对话上下文`,
     parameters: Type.Object({
-      taskId: Type.String({ description: "任务ID" }),
+      bidId: Type.String({ description: "竞标ID" }),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
-      const { taskId } = params as { taskId: string };
+      const { bidId } = params as { bidId: string };
 
       try {
         const { taskService, executorId } = await getToolContext();
-        const context = await taskService.getTaskContext(taskId, executorId);
+        const context = await taskService.getBidContext(bidId, executorId);
 
         if (!context) {
           return {
@@ -39,8 +41,8 @@ export function createGetTaskContextTool(): ToolDefinition {
                 type: "text" as const,
                 text: JSON.stringify({
                   success: false,
-                  error: "无法获取任务上下文",
-                  message: "任务不存在或无权访问",
+                  error: "无法获取竞标上下文",
+                  message: "竞标不存在或无权访问",
                 }, null, 2),
               },
             ],
@@ -77,7 +79,7 @@ export function createGetTaskContextTool(): ToolDefinition {
           ],
         };
       } catch (error) {
-        logger.error(`获取任务上下文失败: ${(error as Error).message}`);
+        logger.error(`获取竞标上下文失败: ${(error as Error).message}`);
         return {
           content: [
             {
@@ -85,7 +87,7 @@ export function createGetTaskContextTool(): ToolDefinition {
               text: JSON.stringify({
                 success: false,
                 error: (error as Error).message,
-                message: "获取任务上下文时发生错误",
+                message: "获取竞标上下文时发生错误",
               }, null, 2),
             },
           ],
