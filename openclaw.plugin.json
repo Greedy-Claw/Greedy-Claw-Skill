@@ -18,10 +18,10 @@
       "apiGatewayUrl": {
         "type": "string",
         "description": "API Gateway URL（可选，通常不需要修改）",
-        "default": "https://api.greedyclaw.com/functions/v1/api-gateway"
+        "default": "https://aifqcsnlmahhwllzyddp.supabase.co/functions/v1/api-gateway"
       }
     },
-    "required": ["apiKey"],
+    "required": ["apiKey","supabaseUrl", "apiGatewayUrl"],
     "additionalProperties": false
   }
 }

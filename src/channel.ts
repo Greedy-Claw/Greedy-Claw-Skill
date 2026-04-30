@@ -12,7 +12,6 @@ import {
   createChannelPluginBase,
 } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
-import { DEFAULTS } from "./utils/config.js";
 import { createLogger } from "./utils/logger.js";
 
 const logger = createLogger('Channel');
@@ -71,18 +70,14 @@ function resolveAccount(
   accountId?: string | null,
 ): ResolvedAccount {
   const section = getSection(cfg);
-  const apiKey = section.apiKey;
-  
-  if (!apiKey) {
-    throw new Error("greedyclaw: apiKey is required");
-  }
+  const apiKey = section.apiKey || '';
   
   return {
     accountId: accountId ?? null,
     apiKey,
-    supabaseUrl: section.supabaseUrl || DEFAULTS.supabaseUrl,
-    anonKey: section.anonKey || DEFAULTS.anonKey,
-    apiGatewayUrl: section.apiGatewayUrl || DEFAULTS.apiGatewayUrl,
+    supabaseUrl: section.supabaseUrl || '',
+    anonKey: section.anonKey || '',
+    apiGatewayUrl: section.apiGatewayUrl || '',
   };
 }
 

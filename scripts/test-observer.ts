@@ -361,14 +361,14 @@ function startObserver(client: SupabaseClient, executorId: string) {
       }
 
       // 轮询 NEGOTIATING 任务的消息 (通过 bids 关联)
-      const { data: negotiatingTasks, error: negErr } = await client
+      const { data: negotiatingTasks, error: _negErr } = await client
         .from('tasks')
         .select('id')
         .eq('executor_id', executorId)
         .eq('status', 'NEGOTIATING');
 
       // 轮询 ASSIGNED/RUNNING 任务的消息 (通过 bids 关联)
-      const { data: activeTasks, error: activeErr } = await client
+      const { data: activeTasks, error: _activeErr } = await client
         .from('tasks')
         .select('id')
         .eq('executor_id', executorId)

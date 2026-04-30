@@ -1,10 +1,13 @@
 /**
  * GreedyClaw 配置管理
- * 从环境变量或 OpenClaw config 中读取配置
  *
- * 重要：supabaseUrl 和 anonKey 不应硬编码
- * 认证时 API Gateway 会返回真实的 Supabase URL 和 anon_key
- * 配置中只需提供 apiKey 和 apiGatewayUrl
+ * 配置来源：OpenClaw 页面配置 (openclaw.plugin.json)
+ * - apiKey: 必填，用户 API Key
+ * - supabaseUrl: 必填，Supabase URL
+ * - apiGatewayUrl: 必填，API Gateway URL
+ * - anonKey: 可选，认证后由 API Gateway 返回
+ *
+ * 注意：不在代码中硬编码任何默认值，所有配置均来自 OpenClaw 页面
  */
 
 export interface GreedyClawConfig {
@@ -14,32 +17,24 @@ export interface GreedyClawConfig {
   apiGatewayUrl: string;
 }
 
-// 默认配置（supabaseUrl 和 anonKey 由认证接口动态返回，无需硬编码）
-export const DEFAULTS = {
-  supabaseUrl: '',
-  anonKey: '',
-  apiGatewayUrl: '',
-};
-
 /**
- * 从环境变量解析配置
+ * 从环境变量解析配置（用于测试或独立运行场景）
+ * 环境变量优先级高于 OpenClaw 配置
  */
 export function parseConfigFromEnv(): Partial<GreedyClawConfig> {
   return {
     apiKey: process.env.GREEDYCLAW_API_KEY || '',
-    supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL || DEFAULTS.supabaseUrl,
-    anonKey: process.env.GREEDYCLAW_ANON_KEY || DEFAULTS.anonKey,
-    apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL || DEFAULTS.apiGatewayUrl,
+    supabaseUrl: process.env.GREEDYCLAW_SUPABASE_URL || '',
+    anonKey: process.env.GREEDYCLAW_ANON_KEY || '',
+    apiGatewayUrl: process.env.GREEDYCLAW_API_GATEWAY_URL || '',
   };
 }
 
 /**
- * 验证配置是否完整
+ * 验证配置是否完整（可选验证，不强制要求）
  */
-export function validateConfig(config: Partial<GreedyClawConfig>): config is GreedyClawConfig {
-  if (!config.apiKey) {
-    throw new Error('GreedyClaw: apiKey is required. Set GREEDYCLAW_API_KEY environment variable.');
-  }
+export function validateConfig(_config: Partial<GreedyClawConfig>): _config is GreedyClawConfig {
+  // 不强制验证 apiKey，允许在没有配置时也能加载插件
   return true;
 }
 

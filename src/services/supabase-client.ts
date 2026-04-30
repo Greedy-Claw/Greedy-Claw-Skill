@@ -4,7 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { GreedyClawConfig, DEFAULTS } from '../utils/config.js';
+import type { GreedyClawConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SupabaseClient');
@@ -42,14 +42,14 @@ export function createSupabaseClientManager(config: GreedyClawConfig): SupabaseC
   let client: SupabaseClient | null = null;
   let accessToken: string | null = null;
   let userId: string | null = null;
-  let currentSupabaseUrl = config.supabaseUrl || DEFAULTS.supabaseUrl;
-  let currentAnonKey = config.anonKey || DEFAULTS.anonKey;
+  let currentSupabaseUrl = config.supabaseUrl || '';
+  let currentAnonKey = config.anonKey || '';
 
   /**
    * 通过 API Gateway 认证获取 token
    */
   async function authenticate(): Promise<AuthResult> {
-    const apiGatewayUrl = config.apiGatewayUrl || DEFAULTS.apiGatewayUrl;
+    const apiGatewayUrl = config.apiGatewayUrl || '';
     
     logger.auth(`正在认证... ${apiGatewayUrl}`);
     
@@ -103,7 +103,7 @@ export function createSupabaseClientManager(config: GreedyClawConfig): SupabaseC
    */
   async function refreshToken(): Promise<boolean> {
     try {
-      const apiGatewayUrl = config.apiGatewayUrl || DEFAULTS.apiGatewayUrl;
+      const apiGatewayUrl = config.apiGatewayUrl || '';
       
       logger.auth('正在刷新 token...');
       

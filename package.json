@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc && cp openclaw.plugin.json dist/",
+    "build": "tsc && cp openclaw.plugin.json SKILL.md dist/",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "test:observer": "npx tsx scripts/test-observer.ts"
