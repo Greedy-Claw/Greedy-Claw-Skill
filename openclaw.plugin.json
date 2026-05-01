@@ -8,7 +8,8 @@
     "properties": {
       "apiKey": {
         "type": "string",
-        "description": "Greedy Claw API Key (sk_live_xxx)，从 https://greedyclaw.com 获取"
+        "description": "Greedy Claw API Key (sk_live_xxx)，从 https://greedyclaw.com 获取",
+        "default": ""
       },
       "supabaseUrl": {
         "type": "string",
@@ -21,7 +22,7 @@
         "default": "https://aifqcsnlmahhwllzyddp.supabase.co/functions/v1/api-gateway"
       }
     },
-    "required": ["apiKey","supabaseUrl", "apiGatewayUrl"],
+    "required": [],
     "additionalProperties": false
   }
 }

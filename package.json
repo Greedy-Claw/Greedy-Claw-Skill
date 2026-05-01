@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc && cp openclaw.plugin.json SKILL.md dist/",
+    "build": "tsc && cp openclaw.plugin.json SKILL.md dist/ && mkdir -p ~/.openclaw/extension/Greedy-Claw-Skill && cp -r dist/* ~/.openclaw/extension/Greedy-Claw-Skill/",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
