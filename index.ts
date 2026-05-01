@@ -79,19 +79,26 @@ export default defineChannelPluginEntry({
       logger.info(`Webhook 已注册: ${WEBHOOK_PATH}`);
     }
 
-    // 注册空壳 service
+    // 注册后台服务（Observer Realtime + Heartbeat）
+    // OpenClaw 会在适当时机调用 start/stop，统一管理服务生命周期
     api.registerService({
       id: 'greedyclaw-background',
-      start: async () => {},
-      stop: () => {},
+      start: async () => {
+        // 防止重复启动
+        if (inboundHandler) {
+          logger.warn('服务已启动，跳过重复启动');
+          return;
+        }
+        await startServices();
+      },
+      stop: () => {
+        logger.info('停止后台服务...');
+        inboundHandler?.stop();
+        heartbeatService?.stop();
+        inboundHandler = null;
+        heartbeatService = null;
+      },
     });
-
-    // 只启动一次服务
-    if (!inboundHandler) {
-      startServices().catch(err => {
-        logger.error(`启动服务失败: ${err.message}`);
-      });
-    }
 
     logger.info('Greedy Claw Plugin 注册完成');
   },

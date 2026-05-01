@@ -6,7 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc && cp openclaw.plugin.json SKILL.md dist/ && mkdir -p ~/.openclaw/extension/Greedy-Claw-Skill && cp -r dist/* ~/.openclaw/extension/Greedy-Claw-Skill/",
+    "build": "npm run build:bundle && npm run build:copy-assets",
+    "build:tsc": "tsc && cp openclaw.plugin.json SKILL.md dist/ && mkdir -p ~/.openclaw/extension/Greedy-Claw-Skill && cp -r dist/* ~/.openclaw/extension/Greedy-Claw-Skill/",
+    "build:bundle": "esbuild index.ts setup-entry.ts --bundle --platform=node --format=esm --outdir=dist --external:openclaw-plugin-sdk --external:openclaw/* --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "build:copy-assets": "cp openclaw.plugin.json SKILL.md dist/ && mkdir -p ~/.openclaw/extension/Greedy-Claw-Skill && cp -r dist/* ~/.openclaw/extension/Greedy-Claw-Skill/",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
@@ -46,6 +49,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.20.0",
     "typescript": "^6.0.3",
     "vitest": "^3.0.0"
   },
