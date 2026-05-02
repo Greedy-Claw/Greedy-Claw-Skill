@@ -1,18 +1,11 @@
 /**
- * GreedyClaw Plugin Entry - 事件注入
+ * GreedyClaw Plugin Entry - 事件注入 + 工具注册
  * 
  * 职责：
  * 1. 启动 Sidecar 子进程
- * 2. 接收 Sidecar 推送的事件（HTTP route → 队列）
- * 3. 通过 api.runtime.subagent.run 为每个 task 开启独立对话
- * 
- * 架构设计：
- * - HTTP route handler (auth: 'plugin') 没有完整的 gateway request scope
- *   直接调 subagent.run 会报 missing scope: operator.write
- * - 解决方案：route handler 只写队列，setInterval poller 消费队列
- * - poller 回调没有活跃的 HTTP request scope，dispatchGatewayMethod
- *   走 fallback context，自动获得 operator.write scope
- * - 这是自包含方案，不需要修改 openclaw 配置，插件可移植
+ * 2. 注册 GreedyClaw 工具（agent 直接调用，不需要 curl）
+ * 3. 接收 Sidecar 推送的事件（HTTP route → 队列）
+ * 4. 通过 api.runtime.subagent.run 为每个 task 开启独立对话
  */
 
 import { spawn, ChildProcess } from 'child_process';
@@ -40,6 +33,7 @@ interface PluginApi {
     auth: 'gateway' | 'plugin';
     handler: (req: any, res: any) => void | Promise<void>;
   }) => void;
+  registerTool: (tool: any, opts?: { name?: string }) => void;
   pluginConfig: PluginConfig;
   runtime: {
     subagent: {
@@ -66,21 +60,238 @@ interface EventData {
   deadline?: string;
 }
 
-interface QueuedEvent {
-  type: string;
-  data: EventData;
-}
-
 // ========================================
 // 全局状态
 // ========================================
 let sidecarProcess: ChildProcess | null = null;
 let pluginRuntime: PluginApi['runtime'] | null = null;
-const eventQueue: QueuedEvent[] = [];
+let sidecarPort: number = 22000;
+const eventQueue: { type: string; data: EventData }[] = [];
 let queuePoller: ReturnType<typeof setInterval> | null = null;
 
 // ========================================
-// 事件队列处理（在 poller 回调中执行，走 fallback context）
+// Sidecar HTTP 调用
+// ========================================
+async function sidecarFetch(path: string, options?: { method?: string; body?: any }): Promise<any> {
+  const url = `http://localhost:${sidecarPort}${path}`;
+  const resp = await fetch(url, {
+    method: options?.method || 'GET',
+    headers: options?.body ? { 'Content-Type': 'application/json' } : undefined,
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Sidecar ${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+// ========================================
+// 工具定义
+// ========================================
+function createTools() {
+  return [
+    {
+      name: 'greedyclaw_get_task_info',
+      label: 'GreedyClaw Get Task Info',
+      description: '获取 GreedyClaw 任务信息。收到 new_task 事件后调用此工具评估任务。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: {
+            type: 'string',
+            description: '任务 ID',
+          },
+        },
+        required: ['taskId'],
+      },
+      execute: async (_toolCallId: string, args: { taskId: string }) => {
+        try {
+          const tasks = await sidecarFetch('/tasks');
+          const task = Array.isArray(tasks)
+            ? tasks.find((t: any) => t.id === args.taskId)
+            : null;
+          if (!task) {
+            return {
+              content: [{ type: 'text' as const, text: `未找到任务 ${args.taskId}` }],
+            };
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(task, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `获取任务信息失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_post_bid',
+      label: 'GreedyClaw Post Bid',
+      description: '提交任务竞标。评估任务后决定竞标时调用。需提供价格、预计完成时间和提案。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: {
+            type: 'string',
+            description: '任务 ID',
+          },
+          price: {
+            type: 'number',
+            description: '竞标价格（银币或金币，与任务的 currency_type 一致）',
+          },
+          etaSeconds: {
+            type: 'number',
+            description: '预计完成时间（秒）',
+          },
+          proposal: {
+            type: 'string',
+            description: '竞标提案（Markdown 格式，说明你的优势和执行计划）',
+          },
+        },
+        required: ['taskId', 'price', 'etaSeconds'],
+      },
+      execute: async (_toolCallId: string, args: { taskId: string; price: number; etaSeconds: number; proposal?: string }) => {
+        try {
+          const result = await sidecarFetch('/bid', {
+            method: 'POST',
+            body: {
+              taskId: args.taskId,
+              price: args.price,
+              etaSeconds: args.etaSeconds,
+              proposal: args.proposal,
+            },
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `竞标失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_send_message',
+      label: 'GreedyClaw Send Message',
+      description: '发送消息给雇主，用于洽谈任务细节。竞标后可主动联系雇主。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bidId: {
+            type: 'string',
+            description: '竞标 ID',
+          },
+          content: {
+            type: 'string',
+            description: '消息内容',
+          },
+        },
+        required: ['bidId', 'content'],
+      },
+      execute: async (_toolCallId: string, args: { bidId: string; content: string }) => {
+        try {
+          const result = await sidecarFetch('/message', {
+            method: 'POST',
+            body: {
+              bidId: args.bidId,
+              content: args.content,
+            },
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `发送消息失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_submit_delivery',
+      label: 'GreedyClaw Submit Delivery',
+      description: '提交任务交付结果。中标并完成任务后调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: {
+            type: 'string',
+            description: '任务 ID',
+          },
+          result: {
+            type: 'string',
+            description: '任务结果（JSON 字符串或纯文本）',
+          },
+          deliverySummary: {
+            type: 'string',
+            description: '交付摘要（纯文本，最多 500 字符）',
+          },
+          deliveryMd: {
+            type: 'string',
+            description: '交付详情（Markdown 格式）',
+          },
+        },
+        required: ['taskId', 'result'],
+      },
+      execute: async (_toolCallId: string, args: { taskId: string; result: string; deliverySummary?: string; deliveryMd?: string }) => {
+        try {
+          let resultData: any;
+          try {
+            resultData = JSON.parse(args.result);
+          } catch {
+            resultData = args.result;
+          }
+          const body: any = {
+            taskId: args.taskId,
+            result: resultData,
+          };
+          if (args.deliverySummary) body.deliverySummary = args.deliverySummary;
+          if (args.deliveryMd) body.deliveryMd = args.deliveryMd;
+
+          const result = await sidecarFetch('/submit', {
+            method: 'POST',
+            body,
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `提交交付失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_get_balance',
+      label: 'GreedyClaw Get Balance',
+      description: '查询 GreedyClaw 钱包余额。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async () => {
+        try {
+          // Sidecar 没有独立的 /balance 端点，通过 /auth/status 获取
+          const status = await sidecarFetch('/auth/status');
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `查询余额失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+  ];
+}
+
+// ========================================
+// 事件队列处理
 // ========================================
 async function processEventQueue(): Promise<void> {
   if (!pluginRuntime?.subagent?.run) return;
@@ -119,11 +330,20 @@ export default {
     const config = api.pluginConfig;
     const SIDECAR_PORT = config.sidecarPort || 22000;
     const PLUGIN_PORT = config.pluginPort || 18789;
-
+    sidecarPort = SIDECAR_PORT;
     pluginRuntime = api.runtime;
 
     // ========================================
-    // 1. 启动 Sidecar + 事件队列轮询器
+    // 1. 注册工具
+    // ========================================
+    const tools = createTools();
+    for (const tool of tools) {
+      api.registerTool(tool, { name: tool.name });
+    }
+    console.log(`[GreedyClaw Plugin] Registered ${tools.length} tools`);
+
+    // ========================================
+    // 2. 启动 Sidecar + 事件队列轮询器
     // ========================================
     api.on('gateway_start', async (ctx) => {
       console.log('[GreedyClaw Plugin] Starting Sidecar...');
@@ -174,7 +394,7 @@ export default {
         sidecarProcess = null;
       });
 
-      // 启动队列轮询器（2秒间隔）
+      // 启动队列轮询器
       if (!queuePoller) {
         queuePoller = setInterval(() => {
           processEventQueue().catch(err => {
@@ -186,7 +406,7 @@ export default {
     });
 
     // ========================================
-    // 2. HTTP route：接收 Sidecar 推送，写入队列
+    // 3. HTTP route：接收 Sidecar 推送，写入队列
     // ========================================
     api.registerHttpRoute({
       path: '/greedyclaw/event',
@@ -214,7 +434,6 @@ export default {
         const { type, data } = parsed;
         console.log(`[GreedyClaw Plugin] Received event: ${type}`);
 
-        // 入队列，由 poller 在 fallback context 中消费
         eventQueue.push({ type, data: data as EventData });
 
         res.statusCode = 200;
