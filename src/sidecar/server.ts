@@ -130,7 +130,12 @@ app.get('/auth/status', (_req: Request, res: Response) => {
  */
 app.get('/tasks', ensureAuthenticated, async (_req: Request, res: Response) => {
   console.log('[Sidecar][DEBUG] GET /tasks - 获取开放任务列表');
-  const { data, error } = await supabase.rpc('get_open_tasks');
+  // get_open_tasks RPC 不存在，直接查询 tasks 表
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, instruction, status, owner_id, executor_id, currency_type, locked_amount, task_type, created_at')
+    .eq('status', 'OPEN')
+    .order('created_at', { ascending: false });
   
   if (error) {
     console.error('[Sidecar] get_open_tasks error:', error);
@@ -147,19 +152,43 @@ app.get('/tasks', ensureAuthenticated, async (_req: Request, res: Response) => {
  * 提交竞标
  */
 app.post('/bid', ensureAuthenticated, async (req: Request, res: Response) => {
-  const { taskId, proposal } = req.body;
+  const { taskId, proposal, price, etaSeconds } = req.body;
   
-  console.log('[Sidecar][DEBUG] POST /bid - 收到竞标请求:', JSON.stringify({ taskId, proposal }, null, 2));
+  console.log('[Sidecar][DEBUG] POST /bid - 收到竞标请求:', JSON.stringify({ taskId, proposal, price, etaSeconds }, null, 2));
   
   if (!taskId) {
     console.log('[Sidecar][DEBUG] POST /bid - 缺少 taskId');
     return res.status(400).json({ error: 'taskId is required' });
   }
+  if (price === undefined || price === null) {
+    console.log('[Sidecar][DEBUG] POST /bid - 缺少 price');
+    return res.status(400).json({ error: 'price is required' });
+  }
+  if (etaSeconds === undefined || etaSeconds === null) {
+    console.log('[Sidecar][DEBUG] POST /bid - 缺少 etaSeconds');
+    return res.status(400).json({ error: 'etaSeconds is required' });
+  }
   
-  const { data, error } = await supabase.rpc('place_bid', {
-    p_task_id: taskId,
-    p_proposal: proposal || null
-  });
+  // place_bid RPC 不存在，直接插入 bids 表
+  // bids 表必填字段: task_id, price, eta_seconds
+  const insertPayload: Record<string, unknown> = {
+    task_id: taskId,
+    price: price,
+    eta_seconds: etaSeconds,
+    proposal: proposal || null,
+  };
+
+  // JWT 模式下 executor_id 由 RLS/auth.uid() 自动填充
+  // 直接模式下需要显式设置 executor_id
+  if (executorId) {
+    insertPayload.executor_id = executorId;
+  }
+
+  const { data, error } = await supabase
+    .from('bids')
+    .insert(insertPayload)
+    .select()
+    .single();
   
   if (error) {
     console.error('[Sidecar] place_bid error:', error);
@@ -203,22 +232,27 @@ app.post('/message', ensureAuthenticated, async (req: Request, res: Response) =>
  * 提交任务结果
  */
 app.post('/submit', ensureAuthenticated, async (req: Request, res: Response) => {
-  const { taskId, result } = req.body;
+  const { taskId, result, status, deliverySummary, deliveryMd, deliveryFilesList } = req.body;
   
-  console.log('[Sidecar][DEBUG] POST /submit - 收到提交请求:', JSON.stringify({ taskId, result }, null, 2));
+  console.log('[Sidecar][DEBUG] POST /submit - 收到提交请求:', JSON.stringify({ taskId, result, status, deliverySummary, deliveryMd, deliveryFilesList }, null, 2));
   
   if (!taskId || !result) {
     console.log('[Sidecar][DEBUG] POST /submit - 缺少必要参数:', JSON.stringify({ taskId, hasResult: !!result }));
     return res.status(400).json({ error: 'taskId and result are required' });
   }
   
-  const { data, error } = await supabase.rpc('submit_task_result', {
+  // submit_task_result RPC 不存在，实际函数名为 executor_submit_result
+  const { data, error } = await supabase.rpc('executor_submit_result', {
     p_task_id: taskId,
-    p_result: result
+    p_result_data: result,
+    p_status: status || 'PENDING_CONFIRM',
+    p_delivery_summary: deliverySummary || '',
+    p_delivery_md: deliveryMd || '',
+    p_delivery_files_list: deliveryFilesList || [],
   });
   
   if (error) {
-    console.error('[Sidecar] submit_task_result error:', error);
+    console.error('[Sidecar] executor_submit_result error:', error);
     return res.status(500).json({ error: error.message });
   }
   
