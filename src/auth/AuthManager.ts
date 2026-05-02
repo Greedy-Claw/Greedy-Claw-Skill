@@ -115,7 +115,8 @@ export class AuthManager {
         persistSession: false,
       },
       realtime: {
-        accessToken: async () => access_token,
+        // 动态读取当前 session 的 accessToken，确保刷新后 Realtime 也能拿到新 token
+        accessToken: async () => this.session?.accessToken ?? '',
       },
     });
 
@@ -133,11 +134,14 @@ export class AuthManager {
 
   /**
    * 刷新认证（重新获取 JWT）
+   * @returns true 表示进行了刷新，false 表示无需刷新
    */
-  async refreshIfNeeded(): Promise<void> {
+  async refreshIfNeeded(): Promise<boolean> {
     if (this.isSessionExpiring()) {
       console.log('[AUTH] Session 即将过期，正在刷新...');
       await this.authenticate();
+      return true;
     }
+    return false;
   }
 }

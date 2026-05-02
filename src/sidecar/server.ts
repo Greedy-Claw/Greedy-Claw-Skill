@@ -84,8 +84,14 @@ async function ensureAuthenticated(_req: Request, res: Response, next: Function)
   try {
     // JWT 模式下检查并刷新 session
     if (authManager) {
-      await authManager.refreshIfNeeded();
-      executorId = authManager.executorId;
+      const refreshed = await authManager.refreshIfNeeded();
+      if (refreshed) {
+        // JWT 已刷新，更新 supabase client 和 Realtime 监听
+        supabase = authManager.client;
+        executorId = authManager.executorId;
+        console.log('[Sidecar] JWT 已刷新，重新设置 Realtime 监听');
+        setupRealtimeListeners();
+      }
     }
     next();
   } catch (error) {
@@ -302,6 +308,14 @@ async function pushToPlugin(type: string, data: EventData): Promise<void> {
 function setupRealtimeListeners(): void {
   console.log('[Sidecar][DEBUG] setupRealtimeListeners - 开始设置 Realtime 监听');
 
+  // 先移除旧的 channel 监听，避免重复订阅
+  try {
+    supabase.removeAllChannels();
+    console.log('[Sidecar][DEBUG] 已移除旧的 Realtime channels');
+  } catch {
+    // 忽略错误
+  }
+
   // 监听新任务
   supabase
     .channel('tasks-channel')
@@ -349,6 +363,49 @@ function setupRealtimeListeners(): void {
     .subscribe((status) => {
       console.log('[Sidecar][DEBUG] bids-messages-channel 订阅状态:', status);
     });
+}
+
+// ========================================
+// JWT 定时刷新机制：在过期前主动刷新
+// ========================================
+const JWT_REFRESH_INTERVAL_MS = 55 * 60_000; // 每 55 分钟检查一次（JWT 默认 1 小时过期，留 5 分钟缓冲）
+let jwtRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+async function refreshJwtIfNeeded(): Promise<void> {
+  if (!authManager) return;
+
+  try {
+    const refreshed = await authManager.refreshIfNeeded();
+    if (refreshed) {
+      supabase = authManager.client;
+      executorId = authManager.executorId;
+      console.log('[Sidecar] JWT 定时刷新成功，重新设置 Realtime 监听');
+      setupRealtimeListeners();
+    }
+  } catch (error) {
+    console.error('[Sidecar] JWT 定时刷新失败:', error);
+  }
+}
+
+function startJwtRefreshTimer(): void {
+  if (!authManager) return; // 直接模式不需要
+
+  // 首次延迟 55 分钟后执行
+  jwtRefreshTimer = setInterval(refreshJwtIfNeeded, JWT_REFRESH_INTERVAL_MS);
+
+  // 防止定时器阻止进程退出
+  if (jwtRefreshTimer && typeof jwtRefreshTimer === 'object' && 'unref' in jwtRefreshTimer) {
+    jwtRefreshTimer.unref();
+  }
+
+  console.log(`[Sidecar] JWT 定时刷新已启动，间隔 ${JWT_REFRESH_INTERVAL_MS / 60_000} 分钟`);
+}
+
+function stopJwtRefreshTimer(): void {
+  if (jwtRefreshTimer) {
+    clearInterval(jwtRefreshTimer);
+    jwtRefreshTimer = null;
+  }
 }
 
 // ========================================
@@ -403,6 +460,7 @@ async function start(): Promise<void> {
     await initializeSupabase();
     setupRealtimeListeners();
     startHeartbeat();
+    startJwtRefreshTimer();
     
     app.listen(PORT, () => {
       console.log(`[Sidecar] Running on port ${PORT}`);
@@ -420,12 +478,14 @@ async function start(): Promise<void> {
 process.on('SIGTERM', () => {
   console.log('[Sidecar] 收到 SIGTERM，正在关闭...');
   stopHeartbeat();
+  stopJwtRefreshTimer();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('[Sidecar] 收到 SIGINT，正在关闭...');
   stopHeartbeat();
+  stopJwtRefreshTimer();
   process.exit(0);
 });
 
