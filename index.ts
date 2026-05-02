@@ -30,6 +30,7 @@ initRuntimeStore();
 let inboundHandler: ReturnType<typeof createInboundHandler> | null = null;
 let heartbeatService: ReturnType<typeof createHeartbeatService> | null = null;
 let clientManager: ReturnType<typeof createSupabaseClientManager> | null = null;
+let storedApi: PluginApi | null = null;
 
 export default defineChannelPluginEntry({
   id: "greedyclaw",
@@ -71,13 +72,24 @@ export default defineChannelPluginEntry({
     // "The typical pattern is a webhook that verifies the request and dispatches it 
     //  through your channel's inbound handler."
     if (api.registerHttpRoute) {
-      api.registerHttpRoute({
-        path: WEBHOOK_PATH,
-        auth: 'plugin', // 使用 plugin 认证
-        handler: createWebhookHandler(api),
-      });
-      logger.info(`Webhook 已注册: ${WEBHOOK_PATH}`);
+      logger.info(`尝试注册 Webhook 路由: ${WEBHOOK_PATH}`);
+      try {
+        api.registerHttpRoute({
+          path: WEBHOOK_PATH,
+          auth: 'plugin', // 使用 plugin 认证
+          handler: createWebhookHandler(api),
+        });
+        logger.info(`Webhook 路由注册成功: ${WEBHOOK_PATH}`);
+      } catch (err) {
+        logger.error(`Webhook 路由注册失败: ${(err as Error).message}`);
+      }
+    } else {
+      logger.warn('registerHttpRoute 方法不可用，Webhook 功能将受限');
+      logger.debug(`可用 API 方法: ${Object.keys(api).join(', ')}`);
     }
+
+    // 存储 API 引用，供 startServices 使用
+    storedApi = api;
 
     // 注册后台服务（Observer Realtime + Heartbeat）
     // OpenClaw 会在适当时机调用 start/stop，统一管理服务生命周期
@@ -105,6 +117,9 @@ export default defineChannelPluginEntry({
 });
 
 async function startServices() {
+let storedApi: PluginApi | null = null;
+
+async function startServices() {
   const authResult = await clientManager!.authenticate();
   const executorId = authResult.userId;
   const client = clientManager!.getClient();
@@ -120,13 +135,22 @@ async function startServices() {
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || '18789';
   const webhookUrl = `http://localhost:${gatewayPort}${WEBHOOK_PATH}`;
 
+  // 创建 Runtime API（优先使用直接调用）
+  const runtimeApi = storedApi ? {
+    dispatchInbound: storedApi.runtime?.channel?.dispatchInbound,
+    subagentRun: storedApi.runtime?.subagent?.run?.bind(storedApi.runtime.subagent),
+  } : undefined;
+
+  logger.info(`Runtime API 状态: dispatchInbound=${!!runtimeApi?.dispatchInbound}, subagentRun=${!!runtimeApi?.subagentRun}`);
+
   // 启动 Inbound Handler（Observer Realtime）— 只创建一次
   inboundHandler = createInboundHandler(
     authResult.accessToken,
     authResult.supabaseUrl,
     authResult.anonKey,
     executorId,
-    webhookUrl  // 传入 webhook URL
+    webhookUrl,  // Webhook 作为备用
+    runtimeApi   // 优先使用直接 runtime API
   );
   await inboundHandler.start();
 

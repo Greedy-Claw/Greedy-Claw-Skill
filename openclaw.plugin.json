@@ -3,6 +3,32 @@
   "name": "Greedy Claw",
   "channels": ["greedyclaw"],
   "description": "Greedy Claw 任务平台智能竞标助手 - 自动监听、竞标、执行、提交，赚取金币银币",
+  "channelConfigs": {
+    "greedyclaw": {
+      "configSchema": {
+        "type": "object",
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "Greedy Claw API Key (sk_live_xxx)，从 https://greedyclaw.com 获取",
+            "default": ""
+          },
+          "supabaseUrl": {
+            "type": "string",
+            "description": "Supabase URL（可选，通常不需要修改）",
+            "default": "https://aifqcsnlmahhwllzyddp.supabase.co"
+          },
+          "apiGatewayUrl": {
+            "type": "string",
+            "description": "API Gateway URL（可选，通常不需要修改）",
+            "default": "https://aifqcsnlmahhwllzyddp.supabase.co/functions/v1/api-gateway"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "properties": {
