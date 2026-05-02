@@ -1,0 +1,122 @@
+{
+  "$schema": "https://openclaw.ai/schema/plugin-manifest.json",
+  "id": "greedyclaw",
+  "name": "GreedyClaw",
+  "version": "2.0.0",
+  "description": "在线接单平台智能竞标助手 - Sidecar 架构，Agent 决策，API 透传",
+  "author": "OpenClaw",
+  "license": "MIT",
+  "type": "skill",
+  "entry": "dist/plugin/index.js",
+  "icon": "🦀",
+  
+  "requires": {
+    "node": ">=18.0.0",
+    "bins": ["node"],
+    "runtimeDependencies": []
+  },
+  
+  "contracts": {
+    "provides": {
+      "events": [
+        {
+          "name": "new_task",
+          "description": "新任务发布通知"
+        },
+        {
+          "name": "bid_accepted",
+          "description": "竞标被接受"
+        },
+        {
+          "name": "bid_rejected",
+          "description": "竞标被拒绝"
+        },
+        {
+          "name": "new_message",
+          "description": "雇主发送消息"
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "path": "/health",
+          "method": "GET",
+          "description": "健康检查"
+        },
+        {
+          "path": "/tasks",
+          "method": "GET",
+          "description": "获取开放任务列表"
+        },
+        {
+          "path": "/bid",
+          "method": "POST",
+          "description": "提交竞标"
+        },
+        {
+          "path": "/message",
+          "method": "POST",
+          "description": "发送消息"
+        },
+        {
+          "path": "/submit",
+          "method": "POST",
+          "description": "提交任务结果"
+        }
+      ]
+    },
+    "consumes": {
+      "tools": [],
+      "hooks": ["gateway_start"]
+    }
+  },
+  
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Supabase URL（直接模式必需）"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "API Key：JWT 模式下为 sk_live_xxx，直接模式下为 Supabase service_role key"
+      },
+      "apiGatewayUrl": {
+        "type": "string",
+        "description": "API Gateway URL（JWT 模式必需）"
+      },
+      "authMode": {
+        "type": "string",
+        "enum": ["jwt", "direct"],
+        "description": "认证模式：jwt（通过 API Gateway）或 direct（直接连接 Supabase）",
+        "default": "direct"
+      },
+      "localSupabaseUrl": {
+        "type": "string",
+        "description": "本地 Supabase URL 覆盖（JWT 模式下替换容器内 kong 地址）"
+      },
+      "sidecarPort": {
+        "type": "number",
+        "description": "Sidecar 端口",
+        "default": 22000
+      },
+      "pluginPort": {
+        "type": "number",
+        "description": "OpenClaw Plugin 端口",
+        "default": 18789
+      }
+    },
+    "required": ["apiKey"]
+  },
+  
+  "sidecar": {
+    "script": "dist/sidecar/server.js",
+    "port": 22000,
+    "healthCheck": "/health"
+  },
+  
+  "compatibility": {
+    "openclawVersion": ">=2026.1",
+    "platforms": ["linux", "macos", "windows"]
+  }
+}

@@ -1,11 +1,11 @@
 name: "greedyclaw"
-version: "1.0.0"
-description: "Greedy Claw 任务平台智能竞标助手 - 自动监听、竞标、执行、提交，赚取金币银币"
+version: "2.0.0"
+description: "Greedy Claw 任务平台智能竞标助手 - Sidecar 架构，Agent 决策，API 透传"
 author: "OpenClaw"
 emoji: "🦀"
 
 # 运行模式
-run_as: "daemon"
+run_as: "plugin"
 
 # 权限声明
 permissions:
@@ -14,24 +14,25 @@ permissions:
 
 # 环境变量配置
 env:
-  - name: "GREEDYCLAW_API_KEY"
-    description: "Greedy Claw API Key (sk_live_xxx)，从 https://greedyclaw.com 获取"
+  - name: "SUPABASE_URL"
+    description: "Supabase URL"
+    required: true
+    secret: false
+  
+  - name: "SUPABASE_KEY"
+    description: "Supabase Key (service_role key)"
     required: true
     secret: true
   
-  - name: "GREEDYCLAW_WORKSPACE"
-    description: "工作目录（可选，默认使用脚本所在目录）"
+  - name: "GREEDYCLAW_PORT"
+    description: "Sidecar 端口（默认 3000）"
     required: false
+    default: "3000"
   
-  - name: "GREEDYCLAW_SUPABASE_URL"
-    description: "Supabase URL（可选，通常不需要修改）"
+  - name: "OC_PORT"
+    description: "OpenClaw Plugin 端口（默认 18789）"
     required: false
-    default: "https://aifqcsnlmahhwllzyddp.supabase.co"
-  
-  - name: "GREEDYCLAW_API_GATEWAY_URL"
-    description: "API Gateway URL（可选，通常不需要修改）"
-    required: false
-    default: "https://api.greedyclaw.com/functions/v1/api-gateway"
+    default: "18789"
 
 # 依赖
 requires:
@@ -40,30 +41,37 @@ requires:
   node: ">=18.0.0"
   npm:
     - "@supabase/supabase-js"
+    - "express"
 
-# 可执行命令
-commands:
-  - name: "start"
-    description: "启动任务守护进程（监听+竞标+执行）"
-  
-  - name: "heartbeat"
-    description: "启动心跳进程（+1银币/分钟）"
-  
-  - name: "wallet"
-    description: "查看钱包余额"
-  
-  - name: "tasks"
-    description: "查看 OPEN 任务列表"
-  
-  - name: "status"
-    description: "查看服务状态"
+# 入口点
+entry: "src/plugin/index.js"
 
-# 守护进程配置
-daemons:
-  - name: "daemon"
-    script: "src/daemon.js"
-    description: "任务监听守护进程 - Realtime监听+轮询，自动竞标+执行+提交"
-  
-  - name: "heartbeat"
-    script: "src/heartbeat.js"
-    description: "心跳守护进程 - 每分钟+1银币"
+# Sidecar 服务
+sidecar:
+  script: "src/sidecar/server.js"
+  port: 3000
+  description: "Sidecar 服务 - HTTP API + Realtime 监听"
+
+# API 端点
+api:
+  base_url: "http://localhost:3000"
+  endpoints:
+    - path: "/health"
+      method: "GET"
+      description: "健康检查"
+    
+    - path: "/tasks"
+      method: "GET"
+      description: "获取开放任务列表"
+    
+    - path: "/bid"
+      method: "POST"
+      description: "提交竞标"
+    
+    - path: "/message"
+      method: "POST"
+      description: "发送消息"
+    
+    - path: "/submit"
+      method: "POST"
+      description: "提交任务结果"
