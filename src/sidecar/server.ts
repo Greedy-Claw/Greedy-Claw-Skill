@@ -129,6 +129,7 @@ app.get('/auth/status', (_req: Request, res: Response) => {
  * 获取所有开放任务列表
  */
 app.get('/tasks', ensureAuthenticated, async (_req: Request, res: Response) => {
+  console.log('[Sidecar][DEBUG] GET /tasks - 获取开放任务列表');
   const { data, error } = await supabase.rpc('get_open_tasks');
   
   if (error) {
@@ -136,6 +137,8 @@ app.get('/tasks', ensureAuthenticated, async (_req: Request, res: Response) => {
     return res.status(500).json({ error: error.message });
   }
   
+  console.log('[Sidecar][DEBUG] GET /tasks 返回任务数:', Array.isArray(data) ? data.length : 'N/A');
+  console.log('[Sidecar][DEBUG] GET /tasks 返回数据:', JSON.stringify(data, null, 2));
   res.json(data);
 });
 
@@ -146,7 +149,10 @@ app.get('/tasks', ensureAuthenticated, async (_req: Request, res: Response) => {
 app.post('/bid', ensureAuthenticated, async (req: Request, res: Response) => {
   const { taskId, proposal } = req.body;
   
+  console.log('[Sidecar][DEBUG] POST /bid - 收到竞标请求:', JSON.stringify({ taskId, proposal }, null, 2));
+  
   if (!taskId) {
+    console.log('[Sidecar][DEBUG] POST /bid - 缺少 taskId');
     return res.status(400).json({ error: 'taskId is required' });
   }
   
@@ -160,6 +166,7 @@ app.post('/bid', ensureAuthenticated, async (req: Request, res: Response) => {
     return res.status(500).json({ error: error.message });
   }
   
+  console.log('[Sidecar][DEBUG] POST /bid - 竞标结果:', JSON.stringify(data, null, 2));
   res.json(data);
 });
 
@@ -170,7 +177,10 @@ app.post('/bid', ensureAuthenticated, async (req: Request, res: Response) => {
 app.post('/message', ensureAuthenticated, async (req: Request, res: Response) => {
   const { bidId, content } = req.body;
   
+  console.log('[Sidecar][DEBUG] POST /message - 收到消息请求:', JSON.stringify({ bidId, content }, null, 2));
+  
   if (!bidId || !content) {
+    console.log('[Sidecar][DEBUG] POST /message - 缺少必要参数:', JSON.stringify({ bidId, content }));
     return res.status(400).json({ error: 'bidId and content are required' });
   }
   
@@ -184,6 +194,7 @@ app.post('/message', ensureAuthenticated, async (req: Request, res: Response) =>
     return res.status(500).json({ error: error.message });
   }
   
+  console.log('[Sidecar][DEBUG] POST /message - 消息发送结果:', JSON.stringify(data, null, 2));
   res.json(data);
 });
 
@@ -194,7 +205,10 @@ app.post('/message', ensureAuthenticated, async (req: Request, res: Response) =>
 app.post('/submit', ensureAuthenticated, async (req: Request, res: Response) => {
   const { taskId, result } = req.body;
   
+  console.log('[Sidecar][DEBUG] POST /submit - 收到提交请求:', JSON.stringify({ taskId, result }, null, 2));
+  
   if (!taskId || !result) {
+    console.log('[Sidecar][DEBUG] POST /submit - 缺少必要参数:', JSON.stringify({ taskId, hasResult: !!result }));
     return res.status(400).json({ error: 'taskId and result are required' });
   }
   
@@ -208,6 +222,7 @@ app.post('/submit', ensureAuthenticated, async (req: Request, res: Response) => 
     return res.status(500).json({ error: error.message });
   }
   
+  console.log('[Sidecar][DEBUG] POST /submit - 提交结果:', JSON.stringify(data, null, 2));
   res.json(data);
 });
 
@@ -229,6 +244,7 @@ interface EventData {
  * 推送事件给 Plugin
  */
 async function pushToPlugin(type: string, data: EventData): Promise<void> {
+  console.log('[Sidecar][DEBUG] pushToPlugin - 推送事件给 Plugin:', JSON.stringify({ type, data }, null, 2));
   try {
     const response = await fetch(PLUGIN_URL, {
       method: 'POST',
@@ -237,7 +253,9 @@ async function pushToPlugin(type: string, data: EventData): Promise<void> {
     });
     
     if (!response.ok) {
-      console.error('[Sidecar] pushToPlugin failed:', response.status);
+      console.error('[Sidecar] pushToPlugin failed:', response.status, response.statusText);
+    } else {
+      console.log('[Sidecar][DEBUG] pushToPlugin - 推送成功, HTTP', response.status);
     }
   } catch (error) {
     console.error('[Sidecar] pushToPlugin error:', (error as Error).message);
@@ -248,17 +266,22 @@ async function pushToPlugin(type: string, data: EventData): Promise<void> {
  * 设置 Realtime 监听
  */
 function setupRealtimeListeners(): void {
+  console.log('[Sidecar][DEBUG] setupRealtimeListeners - 开始设置 Realtime 监听');
+
   // 监听新任务
   supabase
     .channel('tasks-channel')
     .on('postgres_changes', 
       { event: 'INSERT', schema: 'public', table: 'tasks' }, 
       (payload) => {
+        console.log('[Sidecar][DEBUG] Realtime 收到新任务 (INSERT tasks):', JSON.stringify(payload.new, null, 2));
         console.log('[Sidecar] new_task:', payload.new.id);
         pushToPlugin('new_task', payload.new as EventData);
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      console.log('[Sidecar][DEBUG] tasks-channel 订阅状态:', status);
+    });
 
   // 监听 bid 状态变化
   supabase
@@ -268,11 +291,15 @@ function setupRealtimeListeners(): void {
       (payload) => {
         const bid = payload.new as EventData;
         const eventType = bid.status === 'accepted' ? 'bid_accepted' : 'bid_rejected';
+        console.log('[Sidecar][DEBUG] Realtime 收到 bid 更新 (UPDATE bids):', JSON.stringify(payload.new, null, 2));
+        console.log('[Sidecar][DEBUG] Realtime bid 旧值:', JSON.stringify(payload.old, null, 2));
         console.log('[Sidecar] bid update:', bid.id, '→', bid.status);
         pushToPlugin(eventType, bid);
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      console.log('[Sidecar][DEBUG] bids-channel 订阅状态:', status);
+    });
 
   // 监听新消息 (bids_messages)
   supabase
@@ -280,11 +307,58 @@ function setupRealtimeListeners(): void {
     .on('postgres_changes', 
       { event: 'INSERT', schema: 'public', table: 'bids_messages' }, 
       (payload) => {
+        console.log('[Sidecar][DEBUG] Realtime 收到新消息 (INSERT bids_messages):', JSON.stringify(payload.new, null, 2));
         console.log('[Sidecar] new_message:', payload.new.id);
         pushToPlugin('new_message', payload.new as EventData);
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      console.log('[Sidecar][DEBUG] bids-messages-channel 订阅状态:', status);
+    });
+}
+
+// ========================================
+// 心跳机制：每 60 秒向 heartbeat_buffer 表写入一条记录
+// ========================================
+const HEARTBEAT_INTERVAL_MS = 60_000;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+async function sendHeartbeat(): Promise<void> {
+  if (!executorId) {
+    console.log('[Sidecar] 心跳跳过：executorId 未就绪');
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('heartbeat_buffer')
+      .insert({ node_id: executorId });
+
+    if (error) throw error;
+    console.log('[Sidecar] 💓 心跳已发送');
+  } catch (err) {
+    console.log(`[Sidecar] 心跳发送失败: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+  }
+}
+
+function startHeartbeat(): void {
+  // 立即发送一次
+  sendHeartbeat();
+
+  // 定时发送
+  heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+
+  // 防止定时器阻止进程退出（sidecar 作为子进程，由 plugin 管理生命周期）
+  if (heartbeatTimer && typeof heartbeatTimer === 'object' && 'unref' in heartbeatTimer) {
+    heartbeatTimer.unref();
+  }
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
 }
 
 // ========================================
@@ -294,6 +368,7 @@ async function start(): Promise<void> {
   try {
     await initializeSupabase();
     setupRealtimeListeners();
+    startHeartbeat();
     
     app.listen(PORT, () => {
       console.log(`[Sidecar] Running on port ${PORT}`);
@@ -306,5 +381,18 @@ async function start(): Promise<void> {
     process.exit(1);
   }
 }
+
+// 优雅关闭
+process.on('SIGTERM', () => {
+  console.log('[Sidecar] 收到 SIGTERM，正在关闭...');
+  stopHeartbeat();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[Sidecar] 收到 SIGINT，正在关闭...');
+  stopHeartbeat();
+  process.exit(0);
+});
 
 start();

@@ -10,6 +10,8 @@
   "entry": "dist/plugin/index.js",
   "icon": "🦀",
   
+  "skills": ["."],
+  
   "requires": {
     "node": ">=18.0.0",
     "bins": ["node"],
@@ -110,7 +112,7 @@
   },
   
   "sidecar": {
-    "script": "dist/sidecar/server.js",
+    "script": "dist/sidecar/server.cjs",
     "port": 22000,
     "healthCheck": "/health"
   },

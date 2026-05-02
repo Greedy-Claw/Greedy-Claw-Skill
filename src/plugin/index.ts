@@ -4,7 +4,7 @@
  * 职责：
  * 1. 启动 Sidecar 子进程
  * 2. 接收 Sidecar 推送的事件
- * 3. 注入事件给 Agent
+ * 3. 通过 api.runtime.agent.runEmbeddedAgent 直接触发 Agent turn
  * 
  * 不解析 Agent 文本消息，Agent 通过 SKILL.md 了解 API 后直接调用 Sidecar
  * 
@@ -14,6 +14,12 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 interface PluginConfig {
   /** Supabase URL (直接模式) */
@@ -32,23 +38,38 @@ interface PluginConfig {
   pluginPort?: number;
 }
 
+interface OpenClawConfig {
+  [key: string]: any;
+}
+
 interface PluginApi {
   on: (event: string, handler: (ctx?: { config?: PluginConfig }) => void | Promise<void>) => void;
   registerHttpRoute: (config: {
     path: string;
     method: string;
-    handler: (req: Request, res: Response) => void | Promise<void>;
+    auth: 'gateway' | 'plugin';
+    handler: (req: any, res: any) => void | Promise<void>;
   }) => void;
-  send: (message: { content: string; senderId: string }) => Promise<void>;
   pluginConfig: PluginConfig;
-}
-
-interface Request {
-  body: { type: string; data: unknown };
-}
-
-interface Response {
-  send: (data: { status: string }) => void;
+  config: OpenClawConfig;
+  runtime: {
+    agent: {
+      resolveAgentDir: (cfg: OpenClawConfig) => string;
+      resolveAgentWorkspaceDir: (cfg: OpenClawConfig) => string;
+      resolveAgentTimeoutMs: (cfg: OpenClawConfig) => number;
+      runEmbeddedAgent: (params: {
+        sessionId: string;
+        runId: string;
+        sessionFile: string;
+        workspaceDir: string;
+        prompt: string;
+        timeoutMs: number;
+      }) => Promise<any>;
+    };
+    system: {
+      enqueueSystemEvent: (event: any) => Promise<void>;
+    };
+  };
 }
 
 interface EventData {
@@ -66,18 +87,73 @@ interface EventData {
 
 // Sidecar 进程引用
 let sidecarProcess: ChildProcess | null = null;
+// runtime 引用（在 register 中设置）
+let pluginRuntime: PluginApi['runtime'] | null = null;
+let pluginConfig: OpenClawConfig | null = null;
+
+/**
+ * 通过 api.runtime.agent.runEmbeddedAgent 直接触发 Agent turn
+ * fallback: 通过 api.runtime.system.enqueueSystemEvent 注入系统事件
+ */
+async function injectEventToAgent(type: string, data: EventData): Promise<boolean> {
+  const text = formatEvent(type, data);
+  
+  // 优先使用 runEmbeddedAgent 直接触发 Agent turn
+  if (pluginRuntime?.agent?.runEmbeddedAgent && pluginConfig) {
+    try {
+      const sessionId = `greedyclaw:${type}:${data.id}`;
+      const agentDir = pluginRuntime.agent.resolveAgentDir(pluginConfig);
+      
+      console.log(`[GreedyClaw Plugin] Triggering Agent turn via runEmbeddedAgent, sessionId=${sessionId}`);
+      
+      const result = await pluginRuntime.agent.runEmbeddedAgent({
+        sessionId,
+        runId: randomUUID(),
+        sessionFile: join(agentDir, 'sessions', `${sessionId}.jsonl`),
+        workspaceDir: pluginRuntime.agent.resolveAgentWorkspaceDir(pluginConfig),
+        prompt: text,
+        timeoutMs: pluginRuntime.agent.resolveAgentTimeoutMs(pluginConfig),
+      });
+      
+      console.log(`[GreedyClaw Plugin] Agent turn completed:`, JSON.stringify(result));
+      return true;
+    } catch (err) {
+      console.error('[GreedyClaw Plugin] runEmbeddedAgent failed, falling back to enqueueSystemEvent:', err);
+      // fallback to enqueueSystemEvent below
+    }
+  }
+  
+  // Fallback: 使用 enqueueSystemEvent 注入系统事件
+  if (pluginRuntime?.system?.enqueueSystemEvent) {
+    try {
+      console.log(`[GreedyClaw Plugin] Injecting event via enqueueSystemEvent: ${type}`);
+      await pluginRuntime.system.enqueueSystemEvent({ type, text, data });
+      return true;
+    } catch (err) {
+      console.error('[GreedyClaw Plugin] enqueueSystemEvent also failed:', err);
+      return false;
+    }
+  }
+  
+  console.error('[GreedyClaw Plugin] No runtime API available to inject event');
+  return false;
+}
 
 /**
  * Plugin Entry 定义
  */
 export default {
-  id: 'greedyclaw-plugin',
+  id: 'greedyclaw',
   
   register(api: PluginApi): void {
     // 从 api.pluginConfig 获取配置
     const config = api.pluginConfig;
     const SIDECAR_PORT = config.sidecarPort || 22000;
     const PLUGIN_PORT = config.pluginPort || 18789;
+    
+    // 存储 runtime 引用，供 injectEventToAgent 使用
+    pluginRuntime = api.runtime;
+    pluginConfig = api.config;
     
     // ========================================
     // 1. 启动 Sidecar 子进程
@@ -122,7 +198,8 @@ export default {
         console.log(`[GreedyClaw Plugin] Using direct auth, supabase: ${hookConfig.baseUrl}`);
       }
       
-      sidecarProcess = spawn('node', ['dist/sidecar/server.js'], {
+      const sidecarPath = join(__dirname, '..', 'sidecar', 'server.cjs');
+      sidecarProcess = spawn('node', [sidecarPath], {
         stdio: 'inherit',
         env
       });
@@ -141,20 +218,38 @@ export default {
     // 2. 接收 Sidecar 推送的事件，注入给 Agent
     // ========================================
     api.registerHttpRoute({
-      path: '/event',
+      path: '/greedyclaw/event',
       method: 'POST',
-      handler: async (req: Request, res: Response) => {
-        const { type, data } = req.body;
-        
-        console.log('[GreedyClaw Plugin] Received event:', type);
-        
-        // 注入事件给 Agent
-        await api.send({
-          content: formatEvent(type, data as EventData),
-          senderId: 'greedyclaw-sidecar'
+      auth: 'plugin',
+      handler: async (req: any, res: any) => {
+        // OpenClaw 传入原生 IncomingMessage，需要手动读取 body
+        const body = await new Promise<string>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          req.on('data', (chunk: Buffer) => chunks.push(chunk));
+          req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+          req.on('error', reject);
         });
         
-        res.send({ status: 'ok' });
+        let parsed: { type: string; data: unknown };
+        try {
+          parsed = JSON.parse(body);
+        } catch (e) {
+          console.error('[GreedyClaw Plugin] Failed to parse event body:', e);
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON' }));
+          return;
+        }
+        
+        const { type, data } = parsed;
+        console.log(`[GreedyClaw Plugin] Received event: ${type}`);
+        
+        // 通过 runEmbeddedAgent 直接触发 Agent turn
+        const success = await injectEventToAgent(type, data as EventData);
+        
+        res.statusCode = success ? 200 : 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ status: success ? 'ok' : 'error' }));
       }
     });
   }
