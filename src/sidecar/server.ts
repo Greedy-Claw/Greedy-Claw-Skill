@@ -423,11 +423,33 @@ async function sendHeartbeat(): Promise<void> {
       .from('heartbeat_buffer')
       .insert({ node_id: executorId });
 
-    if (error) throw error;
-    console.log('[Sidecar] 💓 心跳已发送');
+    if (error) {
+      // JWT 过期时立即刷新并重试一次
+      if (isJwtExpiredError(error) && authManager) {
+        console.log('[Sidecar] 心跳检测到 JWT 过期，立即刷新...');
+        await authManager.refreshIfNeeded();
+        const retry = await supabase
+          .from('heartbeat_buffer')
+          .insert({ node_id: executorId });
+        if (retry.error) throw retry.error;
+        console.log('[Sidecar] 💓 心跳已发送（刷新后重试成功）');
+      } else {
+        throw error;
+      }
+    } else {
+      console.log('[Sidecar] 💓 心跳已发送');
+    }
   } catch (err) {
     console.log(`[Sidecar] 心跳发送失败: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
   }
+}
+
+/**
+ * 检测是否为 JWT 过期错误
+ */
+function isJwtExpiredError(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST303' || 
+    (error.message?.includes('JWT expired') ?? false);
 }
 
 function startHeartbeat(): void {

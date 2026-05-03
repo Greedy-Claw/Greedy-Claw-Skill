@@ -104,27 +104,23 @@ export class AuthManager {
     };
 
     if (this.supabaseClient) {
-      // 已有 client：只更新 token，不重建 client，避免破坏 Realtime 连接
-      // 更新 global headers 中的 Authorization
-      // @ts-ignore - 访问 SupabaseClient 内部属性以更新 headers
-      this.supabaseClient.rest.headers['Authorization'] = `Bearer ${access_token}`;
-      // 通过 realtime.setAuth() 通知 Realtime 使用新 token
+      // 已有 client：只需更新 session 中的 accessToken
+      // 因为 createClient 使用了顶层 accessToken 回调，fetchWithAuth 会动态读取最新 token
+      // Realtime 也通过 realtime.setAuth() 更新
       this.supabaseClient.realtime.setAuth(access_token);
       console.log(`[AUTH] Token 已更新（复用现有 Supabase Client）`);
     } else {
       // 首次认证：创建带用户身份的 Supabase Client
+      // 关键：使用顶层 accessToken 回调而非 global.headers.Authorization
+      // 这样 fetchWithAuth 在每次请求时动态调用此回调获取最新 token
+      // 而 global.headers.Authorization 是静态的，刷新后不会传播到 PostgREST 请求
       this.supabaseClient = createClient(effectiveUrl, anon_key, {
-        global: {
-          headers: {
-            Authorization: `Bearer ${access_token}`,
-          },
-        },
+        accessToken: async () => this.session?.accessToken ?? '',
         auth: {
           autoRefreshToken: false,
           persistSession: false,
         },
         realtime: {
-          // 动态读取当前 session 的 accessToken，确保刷新后 Realtime 也能拿到新 token
           accessToken: async () => this.session?.accessToken ?? '',
         },
       });
