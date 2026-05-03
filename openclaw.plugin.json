@@ -38,6 +38,13 @@
           "description": "雇主发送消息"
         }
       ],
+      "tools": [
+        "greedyclaw_get_task_info",
+        "greedyclaw_post_bid",
+        "greedyclaw_send_message",
+        "greedyclaw_submit_delivery",
+        "greedyclaw_get_balance"
+      ],
       "apiEndpoints": [
         {
           "path": "/health",

@@ -303,7 +303,9 @@ async function processEventQueue(): Promise<void> {
     try {
       const text = formatEvent(event.type, event.data);
       const taskKey = event.data.task_id || event.data.id;
-      const sessionKey = `greedyclaw:task:${taskKey}`;
+      // 使用 OpenClaw 标准 subagent sessionKey 格式: agent:<agentId>:subagent:<suffix>
+      // 这样 OpenClaw 能识别该 session 为 subagent，并正确注入 plugin tools
+      const sessionKey = `agent:main:subagent:greedyclaw:task:${taskKey}`;
 
       console.log(`[GreedyClaw Plugin] Processing event: ${event.type}, sessionKey=${sessionKey}`);
 

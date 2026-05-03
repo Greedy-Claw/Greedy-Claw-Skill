@@ -372,7 +372,7 @@ async function setupRealtimeListeners(): Promise<void> {
     .channel('bids-messages-channel')
     .on('postgres_changes', 
       { event: 'INSERT', schema: 'public', table: 'bids_messages' }, 
-      (payload) => {
+      async (payload) => {
         const msg = payload.new as EventData;
         console.log('[Sidecar][DEBUG] Realtime 收到新消息 (INSERT bids_messages):', JSON.stringify(msg, null, 2));
 
@@ -382,7 +382,20 @@ async function setupRealtimeListeners(): Promise<void> {
           return;
         }
 
-        console.log('[Sidecar] new_message:', msg.id);
+        // bids_messages 只有 bid_id，需要关联 bids 表获取 task_id，
+        // 以便 Plugin 侧用 task_id 作为 sessionKey 关联到同一任务的对话
+        if (msg.bid_id && !msg.task_id) {
+          const { data: bid } = await supabase
+            .from('bids')
+            .select('task_id')
+            .eq('id', msg.bid_id)
+            .single();
+          if (bid?.task_id) {
+            msg.task_id = bid.task_id;
+          }
+        }
+
+        console.log('[Sidecar] new_message:', msg.id, 'task_id:', msg.task_id);
         pushToPlugin('new_message', msg);
       }
     )
