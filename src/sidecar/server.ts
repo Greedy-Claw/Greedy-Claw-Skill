@@ -616,17 +616,9 @@ async function setupRealtimeListeners(): Promise<void> {
           return;
         }
 
-        let eventType: string;
-        if (newStatus === 'accepted') {
-          eventType = 'bid_accepted';
-        } else if (newStatus === 'rejected') {
-          eventType = 'bid_rejected';
-        } else {
-          console.log('[Sidecar][DEBUG] bid status 变更为非终态:', newStatus, '，忽略');
-          return;
-        }
-
-        pushToPlugin(eventType, newBid);
+        // 统一使用 bid_status_changed 事件，payload 中包含 status 字段
+        // 所有状态变更都转发：PENDING / SHORTLISTED / ACCEPTED / CANCELLED / OUTDATED
+        pushToPlugin('bid_status_changed', newBid);
       }
     )
     .subscribe((status) => {

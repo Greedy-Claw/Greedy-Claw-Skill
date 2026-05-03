@@ -26,12 +26,8 @@
           "description": "新任务发布通知"
         },
         {
-          "name": "bid_accepted",
-          "description": "竞标被接受"
-        },
-        {
-          "name": "bid_rejected",
-          "description": "竞标被拒绝"
+          "name": "bid_status_changed",
+          "description": "竞标状态变更，payload.status 包含新状态：PENDING / SHORTLISTED / ACCEPTED / CANCELLED / OUTDATED"
         },
         {
           "name": "new_message",
