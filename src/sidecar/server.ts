@@ -320,11 +320,14 @@ app.post('/files/upload', ensureAuthenticated, async (req: Request, res: Respons
     }
 
     // 4. 创建 storage_files 记录
+    // 显式传 created_by 以通过 RLS WITH CHECK (created_by = auth.uid())
+    // 触发器也会设置此字段，但 RLS 在触发器之前检查原始行
     const { data: fileRecord, error: insertError } = await supabase
       .from('storage_files')
       .insert({
         bid_id: bidId,
         storage_path: storagePath,
+        created_by: executorId,
         user_metadata: {
           original_name: fileName,
           ...userMetadata,
