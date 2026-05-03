@@ -330,33 +330,60 @@ async function setupRealtimeListeners(): Promise<void> {
       console.log('[Sidecar][DEBUG] tasks-channel 订阅状态:', status);
     });
 
-  // 监听 bid 状态变化
+  // 监听 bid 状态变化（仅在 status 真正变更时推送）
   supabase
     .channel('bids-channel')
     .on('postgres_changes', 
       { event: 'UPDATE', schema: 'public', table: 'bids' }, 
       (payload) => {
-        const bid = payload.new as EventData;
-        const eventType = bid.status === 'accepted' ? 'bid_accepted' : 'bid_rejected';
+        const newBid = payload.new as EventData;
+        const oldStatus = (payload.old as EventData)?.status;
+        const newStatus = newBid.status;
+
         console.log('[Sidecar][DEBUG] Realtime 收到 bid 更新 (UPDATE bids):', JSON.stringify(payload.new, null, 2));
         console.log('[Sidecar][DEBUG] Realtime bid 旧值:', JSON.stringify(payload.old, null, 2));
-        console.log('[Sidecar] bid update:', bid.id, '→', bid.status);
-        pushToPlugin(eventType, bid);
+        console.log('[Sidecar] bid update:', newBid.id, '→', newStatus, '(oldStatus:', oldStatus, ')');
+
+        // 只在 status 真正变更时才推送事件，忽略其他字段的更新
+        if (oldStatus === newStatus) {
+          console.log('[Sidecar][DEBUG] bid status 未变化，忽略此更新');
+          return;
+        }
+
+        let eventType: string;
+        if (newStatus === 'accepted') {
+          eventType = 'bid_accepted';
+        } else if (newStatus === 'rejected') {
+          eventType = 'bid_rejected';
+        } else {
+          console.log('[Sidecar][DEBUG] bid status 变更为非终态:', newStatus, '，忽略');
+          return;
+        }
+
+        pushToPlugin(eventType, newBid);
       }
     )
     .subscribe((status) => {
       console.log('[Sidecar][DEBUG] bids-channel 订阅状态:', status);
     });
 
-  // 监听新消息 (bids_messages)
+  // 监听新消息 (bids_messages) —— 过滤掉自己发出的消息，避免回声
   supabase
     .channel('bids-messages-channel')
     .on('postgres_changes', 
       { event: 'INSERT', schema: 'public', table: 'bids_messages' }, 
       (payload) => {
-        console.log('[Sidecar][DEBUG] Realtime 收到新消息 (INSERT bids_messages):', JSON.stringify(payload.new, null, 2));
-        console.log('[Sidecar] new_message:', payload.new.id);
-        pushToPlugin('new_message', payload.new as EventData);
+        const msg = payload.new as EventData;
+        console.log('[Sidecar][DEBUG] Realtime 收到新消息 (INSERT bids_messages):', JSON.stringify(msg, null, 2));
+
+        // 过滤掉自己发出的消息，避免回声环路
+        if (executorId && msg.sender_id === executorId) {
+          console.log('[Sidecar][DEBUG] 忽略自己发送的消息, sender_id:', msg.sender_id);
+          return;
+        }
+
+        console.log('[Sidecar] new_message:', msg.id);
+        pushToPlugin('new_message', msg);
       }
     )
     .subscribe((status) => {
@@ -377,8 +404,9 @@ async function refreshJwtIfNeeded(): Promise<void> {
     const refreshed = await authManager.refreshIfNeeded();
     if (refreshed) {
       executorId = authManager.executorId;
-      // client 不变，AuthManager 内部已通过 realtime.setAuth() 更新 token
-      console.log('[Sidecar] JWT 定时刷新成功，Realtime token 已同步更新');
+      // JWT 刷新后 Realtime channel 可能已被服务端断开，需要重建订阅
+      await setupRealtimeListeners();
+      console.log('[Sidecar] JWT 定时刷新成功，Realtime 已重新订阅');
     }
   } catch (error) {
     console.error('[Sidecar] JWT 定时刷新失败:', error);
@@ -428,6 +456,8 @@ async function sendHeartbeat(): Promise<void> {
       if (isJwtExpiredError(error) && authManager) {
         console.log('[Sidecar] 心跳检测到 JWT 过期，立即刷新...');
         await authManager.refreshIfNeeded();
+        // JWT 刷新后 Realtime channel 可能已被断开，重建订阅
+        await setupRealtimeListeners();
         const retry = await supabase
           .from('heartbeat_buffer')
           .insert({ node_id: executorId });
