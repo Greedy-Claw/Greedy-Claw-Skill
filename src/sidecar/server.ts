@@ -17,7 +17,11 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AuthManager } from '../auth/AuthManager.js';
 
 const app = express();
-app.use(express.json());
+
+// 文件上传使用 multipart，JSON 用于普通 API
+// 需要手动处理 multipart 以避免额外依赖
+app.use(express.json({ limit: '50mb' }));
+app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 
 // ========================================
 // 配置 - 从环境变量获取（由 Plugin Entry 传递）
@@ -263,6 +267,268 @@ app.post('/submit', ensureAuthenticated, async (req: Request, res: Response) => 
   console.log('[Sidecar][DEBUG] POST /submit - 提交结果:', JSON.stringify(data, null, 2));
   res.json(data);
 });
+
+// ========================================
+// 文件管理 API
+// ========================================
+
+/**
+ * POST /files/upload
+ * 上传文件到 task-deliveries bucket + 创建 storage_files 记录
+ * 
+ * Content-Type: application/json
+ * Body: { bidId, fileName, fileBase64, userMetadata? }
+ */
+app.post('/files/upload', ensureAuthenticated, async (req: Request, res: Response) => {
+  const { bidId, fileName, fileBase64, userMetadata } = req.body;
+
+  if (!bidId || !fileName || !fileBase64) {
+    return res.status(400).json({ error: 'bidId, fileName and fileBase64 are required' });
+  }
+
+  try {
+    // 1. 查询 bid 获取 task_id 和 executor_id
+    const { data: bid, error: bidError } = await supabase
+      .from('bids')
+      .select('id, task_id, executor_id, status')
+      .eq('id', bidId)
+      .single();
+
+    if (bidError || !bid) {
+      return res.status(404).json({ error: 'Bid not found' });
+    }
+
+    // 2. 生成 storage_path: {task_id}/{bid_id}/executor/{filename}
+    // 使用 UUID 替换原始文件名避免中文/特殊字符问题
+    const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+    const storageFileName = crypto.randomUUID() + ext;
+    const storagePath = `${bid.task_id}/${bidId}/executor/${storageFileName}`;
+
+    // 3. 解码 base64 并上传到 Storage
+    const fileBuffer = Buffer.from(fileBase64, 'base64');
+
+    const { error: uploadError } = await supabase.storage
+      .from('task-deliveries')
+      .upload(storagePath, fileBuffer, {
+        contentType: getContentType(fileName),
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('[Sidecar] File upload error:', uploadError);
+      return res.status(500).json({ error: `Storage upload failed: ${uploadError.message}` });
+    }
+
+    // 4. 创建 storage_files 记录
+    const { data: fileRecord, error: insertError } = await supabase
+      .from('storage_files')
+      .insert({
+        bid_id: bidId,
+        storage_path: storagePath,
+        user_metadata: {
+          original_name: fileName,
+          ...userMetadata,
+        },
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('[Sidecar] storage_files insert error:', insertError);
+      // 回滚：删除已上传的文件
+      await supabase.storage.from('task-deliveries').remove([storagePath]);
+      return res.status(500).json({ error: `Failed to create file record: ${insertError.message}` });
+    }
+
+    console.log('[Sidecar] File uploaded:', fileRecord.id, storagePath);
+    res.json({
+      id: fileRecord.id,
+      storagePath: fileRecord.storage_path,
+      fileName: fileName,
+      createdAt: fileRecord.created_at,
+    });
+  } catch (err: any) {
+    console.error('[Sidecar] Upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /files/download/:id
+ * 下载文件：查 storage_files → 从 Storage 读取 → 返回文件流
+ */
+app.get('/files/download/:id', ensureAuthenticated, async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    // 1. 查询 storage_files 记录
+    const { data: fileRecord, error: dbError } = await supabase
+      .from('storage_files')
+      .select('id, storage_path, user_metadata, file_name')
+      .eq('id', id)
+      .single();
+
+    if (dbError || !fileRecord) {
+      return res.status(404).json({ error: 'File record not found' });
+    }
+
+    // 2. 从 Storage 下载文件
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from('task-deliveries')
+      .download(fileRecord.storage_path);
+
+    if (downloadError || !fileData) {
+      console.error('[Sidecar] Storage download error:', downloadError);
+      return res.status(500).json({ error: 'Failed to download file from storage' });
+    }
+
+    // 3. 设置响应头，使用原始文件名
+    const originalName = (fileRecord.user_metadata as any)?.original_name
+      || fileRecord.file_name
+      || fileRecord.storage_path.split('/').pop()
+      || 'download';
+
+    const buffer = Buffer.from(await fileData.arrayBuffer());
+    res.setHeader('Content-Type', getContentType(originalName));
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(originalName)}`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err: any) {
+    console.error('[Sidecar] Download error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /files/list
+ * 列出文件：查询 storage_files 表，RLS 自动过滤
+ * 
+ * Query params: bidId (optional, 过滤特定 bid 的文件)
+ */
+app.get('/files/list', ensureAuthenticated, async (req: Request, res: Response) => {
+  const { bidId } = req.query;
+
+  try {
+    let query = supabase
+      .from('storage_files')
+      .select('id, bid_id, storage_path, user_metadata, file_name, file_size, created_at, created_by')
+      .order('created_at', { ascending: false });
+
+    if (bidId) {
+      query = query.eq('bid_id', bidId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('[Sidecar] List files error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    // 转换为客户端友好的格式
+    const files = (data || []).map(f => ({
+      id: f.id,
+      bidId: f.bid_id,
+      storagePath: f.storage_path,
+      fileName: (f.user_metadata as any)?.original_name || f.file_name || f.storage_path.split('/').pop(),
+      fileSize: f.file_size,
+      createdAt: f.created_at,
+      createdBy: f.created_by,
+    }));
+
+    res.json(files);
+  } catch (err: any) {
+    console.error('[Sidecar] List files error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /files/delete/:id
+ * 删除文件：删除 Storage 对象 + storage_files 记录
+ */
+app.delete('/files/delete/:id', ensureAuthenticated, async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    // 1. 查询 storage_files 记录
+    const { data: fileRecord, error: dbError } = await supabase
+      .from('storage_files')
+      .select('id, storage_path')
+      .eq('id', id)
+      .single();
+
+    if (dbError || !fileRecord) {
+      return res.status(404).json({ error: 'File record not found' });
+    }
+
+    // 2. 删除 Storage 对象
+    const { error: storageError } = await supabase.storage
+      .from('task-deliveries')
+      .remove([fileRecord.storage_path]);
+
+    if (storageError) {
+      console.error('[Sidecar] Storage delete error:', storageError);
+      // 继续删除记录，即使 Storage 删除失败
+    }
+
+    // 3. 删除 storage_files 记录（由 service_role 执行，绕过 RLS DELETE 限制）
+    // 在 direct 模式下，supabase client 是 service_role，可以直接删除
+    // 在 JWT 模式下，需要通过 service_role client 删除
+    // 注意：storage_files RLS 策略禁止 authenticated 用户删除
+    // 但 on_storage_object_delete 触发器会在 Storage 对象被删除时自动清理
+    // 所以如果 Storage 删除成功，storage_files 记录会被触发器自动删除
+    // 如果 Storage 删除失败，我们仍需要手动删除记录
+    if (!storageError) {
+      // Storage 删除成功，触发器会自动删除 storage_files 记录
+      console.log('[Sidecar] File deleted from storage, trigger will clean up storage_files record');
+    } else {
+      // Storage 删除失败，尝试直接删除记录
+      // 注意：在 JWT 模式下，RLS 可能阻止删除
+      // 使用 service_role client 时可以删除
+      const { error: deleteError } = await supabase
+        .from('storage_files')
+        .delete()
+        .eq('id', id);
+
+      if (deleteError) {
+        console.error('[Sidecar] storage_files delete error:', deleteError);
+        return res.status(500).json({ error: 'Failed to delete file record' });
+      }
+    }
+
+    console.log('[Sidecar] File deleted:', id);
+    res.json({ id, deleted: true });
+  } catch (err: any) {
+    console.error('[Sidecar] Delete file error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 根据 filename 推断 Content-Type
+ */
+function getContentType(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  const mimeMap: Record<string, string> = {
+    pdf: 'application/pdf',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    zip: 'application/zip',
+    json: 'application/json',
+    csv: 'text/csv',
+  };
+  return mimeMap[ext] || 'application/octet-stream';
+}
 
 // ========================================
 // Realtime 监听：推送给 Plugin

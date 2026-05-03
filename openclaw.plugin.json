@@ -43,7 +43,11 @@
         "greedyclaw_post_bid",
         "greedyclaw_send_message",
         "greedyclaw_submit_delivery",
-        "greedyclaw_get_balance"
+        "greedyclaw_get_balance",
+        "greedyclaw_upload_file",
+        "greedyclaw_list_files",
+        "greedyclaw_download_file",
+        "greedyclaw_delete_file"
       ],
       "apiEndpoints": [
         {
@@ -70,6 +74,26 @@
           "path": "/submit",
           "method": "POST",
           "description": "提交任务结果"
+        },
+        {
+          "path": "/files/upload",
+          "method": "POST",
+          "description": "上传交付文件"
+        },
+        {
+          "path": "/files/download/:id",
+          "method": "GET",
+          "description": "下载交付文件"
+        },
+        {
+          "path": "/files/list",
+          "method": "GET",
+          "description": "列出交付文件"
+        },
+        {
+          "path": "/files/delete/:id",
+          "method": "DELETE",
+          "description": "删除交付文件"
         }
       ]
     },

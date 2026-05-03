@@ -287,6 +287,162 @@ function createTools() {
         }
       },
     },
+    {
+      name: 'greedyclaw_upload_file',
+      label: 'GreedyClaw Upload File',
+      description: '上传文件到任务交付目录。中标后需要上传交付文件时调用。文件将被上传到 task-deliveries bucket 并创建 storage_files 记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bidId: {
+            type: 'string',
+            description: '竞标 ID',
+          },
+          fileName: {
+            type: 'string',
+            description: '原始文件名（含扩展名），如 "report.pdf"',
+          },
+          fileBase64: {
+            type: 'string',
+            description: '文件的 Base64 编码内容',
+          },
+          description: {
+            type: 'string',
+            description: '文件描述（可选）',
+          },
+        },
+        required: ['bidId', 'fileName', 'fileBase64'],
+      },
+      execute: async (_toolCallId: string, args: { bidId: string; fileName: string; fileBase64: string; description?: string }) => {
+        try {
+          const result = await sidecarFetch('/files/upload', {
+            method: 'POST',
+            body: {
+              bidId: args.bidId,
+              fileName: args.fileName,
+              fileBase64: args.fileBase64,
+              userMetadata: args.description ? { description: args.description } : undefined,
+            },
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `上传文件失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_list_files',
+      label: 'GreedyClaw List Files',
+      description: '列出任务交付文件。可查看某个 bid 下的所有上传文件。RLS 自动过滤，只能看到有权限的文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bidId: {
+            type: 'string',
+            description: '竞标 ID（可选，不传则列出所有有权限的文件）',
+          },
+        },
+      },
+      execute: async (_toolCallId: string, args: { bidId?: string }) => {
+        try {
+          const query = args.bidId ? `?bidId=${args.bidId}` : '';
+          const result = await sidecarFetch(`/files/list${query}`);
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `列出文件失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_download_file',
+      label: 'GreedyClaw Download File',
+      description: '下载任务交付文件。返回文件的 Base64 编码内容和原始文件名。需要知道文件的 ID（可通过 list_files 获取）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: '文件 ID（storage_files 表的 id）',
+          },
+        },
+        required: ['fileId'],
+      },
+      execute: async (_toolCallId: string, args: { fileId: string }) => {
+        try {
+          const url = `http://localhost:${sidecarPort}/files/download/${args.fileId}`;
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`Download failed: ${resp.status} ${text}`);
+          }
+
+          const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+          const contentDisposition = resp.headers.get('content-disposition') || '';
+          const buffer = Buffer.from(await resp.arrayBuffer());
+          const base64 = buffer.toString('base64');
+
+          // 从 Content-Disposition 解析文件名
+          let fileName = 'download';
+          const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
+          if (match) {
+            fileName = decodeURIComponent(match[1]);
+          }
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                fileName,
+                contentType,
+                sizeBytes: buffer.length,
+                fileBase64: base64,
+              }, null, 2),
+            }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `下载文件失败: ${err.message}` }],
+          };
+        }
+      },
+    },
+    {
+      name: 'greedyclaw_delete_file',
+      label: 'GreedyClaw Delete File',
+      description: '删除任务交付文件。同时删除 Storage 对象和 storage_files 记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: '文件 ID（storage_files 表的 id）',
+          },
+        },
+        required: ['fileId'],
+      },
+      execute: async (_toolCallId: string, args: { fileId: string }) => {
+        try {
+          const result = await sidecarFetch(`/files/delete/${args.fileId}`, {
+            method: 'DELETE',
+          });
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text' as const, text: `删除文件失败: ${err.message}` }],
+          };
+        }
+      },
+    },
   ];
 }
 
