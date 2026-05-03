@@ -448,5 +448,5 @@ export default {
 // 事件格式化
 // ========================================
 function formatEvent(type: string, data: EventData): string {
-  return `[GreedyClaw 事件] 类型: ${type}\n数据: ${JSON.stringify(data, null, 2)}\n\n请根据 SKILL.md 检查并响应此事件。`;
+  return `[GreedyClaw 事件] 类型: ${type}\n数据: ${JSON.stringify(data, null, 2)}\n\n请根据 GreedyClaw插件的SKILL.md 检查并响应此事件。`;
 }

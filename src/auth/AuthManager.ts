@@ -103,22 +103,32 @@ export class AuthManager {
       expiresAt: Math.floor(Date.now() / 1000) + (expires_in || 3600),
     };
 
-    // 创建带用户身份的 Supabase Client
-    this.supabaseClient = createClient(effectiveUrl, anon_key, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
+    if (this.supabaseClient) {
+      // 已有 client：只更新 token，不重建 client，避免破坏 Realtime 连接
+      // 更新 global headers 中的 Authorization
+      // @ts-ignore - 访问 SupabaseClient 内部属性以更新 headers
+      this.supabaseClient.rest.headers['Authorization'] = `Bearer ${access_token}`;
+      // 通过 realtime.setAuth() 通知 Realtime 使用新 token
+      this.supabaseClient.realtime.setAuth(access_token);
+      console.log(`[AUTH] Token 已更新（复用现有 Supabase Client）`);
+    } else {
+      // 首次认证：创建带用户身份的 Supabase Client
+      this.supabaseClient = createClient(effectiveUrl, anon_key, {
+        global: {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+          },
         },
-      },
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-      realtime: {
-        // 动态读取当前 session 的 accessToken，确保刷新后 Realtime 也能拿到新 token
-        accessToken: async () => this.session?.accessToken ?? '',
-      },
-    });
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+        realtime: {
+          // 动态读取当前 session 的 accessToken，确保刷新后 Realtime 也能拿到新 token
+          accessToken: async () => this.session?.accessToken ?? '',
+        },
+      });
+    }
 
     console.log(`[AUTH] 认证成功! executor_id: ${user_id}`);
     console.log(`[AUTH] JWT 有效期: ${expires_in}s`);

@@ -86,11 +86,9 @@ async function ensureAuthenticated(_req: Request, res: Response, next: Function)
     if (authManager) {
       const refreshed = await authManager.refreshIfNeeded();
       if (refreshed) {
-        // JWT 已刷新，更新 supabase client 和 Realtime 监听
-        supabase = authManager.client;
+        // JWT 已刷新，client 不变（AuthManager 内部已通过 setAuth 更新 Realtime token）
         executorId = authManager.executorId;
-        console.log('[Sidecar] JWT 已刷新，重新设置 Realtime 监听');
-        setupRealtimeListeners();
+        console.log('[Sidecar] JWT 已刷新，Realtime token 已同步更新');
       }
     }
     next();
@@ -305,12 +303,13 @@ async function pushToPlugin(type: string, data: EventData): Promise<void> {
 /**
  * 设置 Realtime 监听
  */
-function setupRealtimeListeners(): void {
+async function setupRealtimeListeners(): Promise<void> {
   console.log('[Sidecar][DEBUG] setupRealtimeListeners - 开始设置 Realtime 监听');
 
   // 先移除旧的 channel 监听，避免重复订阅
+  // 注意：removeAllChannels 是异步的，必须 await 等待所有 channel 完全取消订阅并断开 WebSocket
   try {
-    supabase.removeAllChannels();
+    await supabase.removeAllChannels();
     console.log('[Sidecar][DEBUG] 已移除旧的 Realtime channels');
   } catch {
     // 忽略错误
@@ -377,10 +376,9 @@ async function refreshJwtIfNeeded(): Promise<void> {
   try {
     const refreshed = await authManager.refreshIfNeeded();
     if (refreshed) {
-      supabase = authManager.client;
       executorId = authManager.executorId;
-      console.log('[Sidecar] JWT 定时刷新成功，重新设置 Realtime 监听');
-      setupRealtimeListeners();
+      // client 不变，AuthManager 内部已通过 realtime.setAuth() 更新 token
+      console.log('[Sidecar] JWT 定时刷新成功，Realtime token 已同步更新');
     }
   } catch (error) {
     console.error('[Sidecar] JWT 定时刷新失败:', error);
@@ -458,7 +456,7 @@ function stopHeartbeat(): void {
 async function start(): Promise<void> {
   try {
     await initializeSupabase();
-    setupRealtimeListeners();
+    await setupRealtimeListeners();
     startHeartbeat();
     startJwtRefreshTimer();
     
