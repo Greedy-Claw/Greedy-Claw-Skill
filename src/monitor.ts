@@ -44,59 +44,30 @@ const JWT_REFRESH_INTERVAL_MS = 55 * 60_000;
 // Supabase 初始化
 // ========================================
 interface InitOpts {
-  authMode: string;
-  apiKey?: string;
-  apiGatewayUrl?: string;
-  supabaseUrl?: string;
-  supabaseKey?: string;
+  apiKey: string;
+  apiGatewayUrl: string;
+  supabaseUrl: string;
+  supabaseKey: string;
 }
 
 export async function initializeSupabase(opts: InitOpts): Promise<void> {
-  const { authMode, apiKey, apiGatewayUrl, supabaseUrl, supabaseKey } = opts;
+  const { apiKey, apiGatewayUrl, supabaseUrl, supabaseKey } = opts;
 
-  if (authMode === 'jwt' && apiKey && apiGatewayUrl) {
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error(
-        '[GreedyClaw] JWT mode requires supabaseUrl and supabaseKey (anon key) in config. ' +
-        'API Gateway no longer returns these fields.',
-      );
-    }
+  console.log('[GreedyClaw] 使用 JWT 认证模式');
 
-    console.log('[GreedyClaw] 使用 JWT 认证模式');
+  const authManager = new AuthManager({
+    apiKey,
+    apiGatewayUrl,
+    supabaseUrl,
+    anonKey: supabaseKey,
+  });
 
-    const authManager = new AuthManager({
-      apiKey,
-      apiGatewayUrl,
-      supabaseUrl,
-      anonKey: supabaseKey,
-    });
+  await authManager.authenticate();
+  setSupabase(authManager.client);
+  setAuthManager(authManager);
+  setExecutorId(authManager.executorId);
 
-    await authManager.authenticate();
-    setSupabase(authManager.client);
-    setAuthManager(authManager);
-    setExecutorId(authManager.executorId);
-
-    console.log(`[GreedyClaw] 已认证用户: ${authManager.executorId}`);
-  } else if (supabaseUrl && supabaseKey) {
-    console.log('[GreedyClaw] 使用直接认证模式（开发环境）');
-
-    const { createClient } = await import('@supabase/supabase-js');
-    const client = createClient(supabaseUrl, supabaseKey, {
-      realtime: { params: { eventsPerSecond: 10 } },
-    });
-
-    setSupabase(client);
-    setAuthManager(null);
-    setExecutorId(null);
-
-    console.log('[GreedyClaw] Supabase 连接成功（无用户身份）');
-  } else {
-    throw new Error(
-      '[GreedyClaw] Missing required config. ' +
-      'JWT mode requires: apiKey, apiGatewayUrl. ' +
-      'Direct mode requires: supabaseUrl, supabaseKey.',
-    );
-  }
+  console.log(`[GreedyClaw] 已认证用户: ${authManager.executorId}`);
 }
 
 // ========================================

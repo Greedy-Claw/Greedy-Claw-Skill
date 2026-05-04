@@ -29,10 +29,10 @@ import {
 // 类型
 // ========================================
 interface PluginConfig {
-  baseUrl?: string;
+  baseUrl: string;
   apiKey: string;
-  apiGatewayUrl?: string;
-  authMode?: 'jwt' | 'direct';
+  supabaseKey: string;
+  apiGatewayUrl: string;
   sidecarPort?: number;  // 保留字段兼容旧配置，但不再使用
   pluginPort?: number;   // 保留字段兼容旧配置，但不再使用
 }
@@ -82,16 +82,13 @@ function formatEvent(type: string, data: EventData): string {
 async function startMonitor(accountId: string | null, config: PluginConfig): Promise<void> {
   console.log(`[GreedyClaw] startMonitor: initializing for accountId=${accountId}...`);
 
-  const authMode = config.authMode || (config.apiGatewayUrl ? 'jwt' : 'direct');
-
-  // 初始化 Supabase
+  // 初始化 Supabase（仅 JWT 模式）
   try {
     await initializeSupabase({
-      authMode,
       apiKey: config.apiKey,
       apiGatewayUrl: config.apiGatewayUrl,
       supabaseUrl: config.baseUrl,
-      supabaseKey: config.apiKey,
+      supabaseKey: config.supabaseKey,
     });
   } catch (err) {
     console.error('[GreedyClaw] Supabase 初始化失败:', err);
@@ -99,7 +96,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     return;
   }
 
-  console.log(`[GreedyClaw] Supabase 初始化完成, authMode=${authMode}, executorId=${getExecutorId() || 'anonymous'}`);
+  console.log(`[GreedyClaw] Supabase 初始化完成, executorId=${getExecutorId() || 'anonymous'}`);
 
   // 获取 AbortController
   const controller = getAccountAbortController(accountId);

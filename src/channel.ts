@@ -140,15 +140,14 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
         const key = getAccountKey(account.accountId);
         console.log(`[GreedyClaw] gateway.startAccount: accountId=${account.accountId}`);
 
-        // 如果 AbortController 已存在（gateway_start 已创建），直接用
-        // 否则创建新的
+        // 创建或复用 AbortController
         let controller = getAccountAbortController(account.accountId);
-        if (!controller) {
+        if (!controller || controller.signal.aborted) {
           controller = new AbortController();
           setAccountAbortController(account.accountId, controller);
         }
 
-        // 如果 ctx 有 abortSignal，联动
+        // 联动 ctx.abortSignal
         if (ctx?.abortSignal && !ctx.abortSignal.aborted) {
           ctx.abortSignal.addEventListener('abort', () => controller!.abort(), { once: true });
         }
@@ -156,7 +155,16 @@ export const greedyclawPlugin = createChatChannelPlugin<ResolvedAccount>({
         markAccountConnected(account.accountId);
         console.log(`[GreedyClaw] gateway.startAccount: account ${key} marked as connected`);
 
-        return { started: true };
+        // startAccount 必须是长驻函数：只要 Promise 不 resolve，gateway 就认为 running
+        // 返回一个在 abortSignal 触发时才 resolve 的 Promise
+        return new Promise<void>((resolve) => {
+          const signal = controller!.signal;
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
       },
       async stopAccount(account: ResolvedAccount, ctx: any) {
         const key = getAccountKey(account.accountId);

@@ -23,29 +23,26 @@
         "properties": {
           "baseUrl": {
             "type": "string",
-            "description": "Supabase URL（JWT 模式和直接模式均必需）"
+            "description": "Supabase 项目 URL"
           },
           "apiKey": {
             "type": "string",
-            "description": "JWT 模式下为 sk_live_xxx API Key；直接模式下为 Supabase anon key"
+            "description": "API Key（sk_live_xxx 格式，用于通过 API Gateway 获取 JWT）"
+          },
+          "supabaseKey": {
+            "type": "string",
+            "description": "Supabase anon key（必填，用于项目级身份验证）"
           },
           "apiGatewayUrl": {
             "type": "string",
-            "description": "API Gateway URL（JWT 模式必需）"
-          },
-          "authMode": {
-            "type": "string",
-            "enum": [
-              "jwt",
-              "direct"
-            ],
-            "description": "认证模式：jwt（通过 API Gateway 获取 JWT）或 direct（直接连接 Supabase）",
-            "default": "direct"
+            "description": "API Gateway URL"
           }
         },
         "required": [
           "apiKey",
-          "baseUrl"
+          "baseUrl",
+          "supabaseKey",
+          "apiGatewayUrl"
         ]
       },
       "label": "GreedyClaw",
@@ -100,24 +97,22 @@
     "properties": {
       "baseUrl": {
         "type": "string",
-        "description": "Supabase URL（JWT 模式和直接模式均必需）"
+        "description": "Supabase 项目 URL"
       },
       "apiKey": {
         "type": "string",
-        "description": "JWT 模式下为 sk_live_xxx API Key；直接模式下为 Supabase anon key"
+        "description": "API Key（sk_live_xxx 格式，用于通过 API Gateway 获取 JWT）"
+      },
+      "supabaseKey": {
+        "type": "string",
+        "description": "Supabase anon key（必填，用于项目级身份验证）"
       },
       "apiGatewayUrl": {
         "type": "string",
-        "description": "API Gateway URL（JWT 模式必需）"
-      },
-      "authMode": {
-        "type": "string",
-        "enum": ["jwt", "direct"],
-        "description": "认证模式：jwt（通过 API Gateway 获取 JWT）或 direct（直接连接 Supabase）",
-        "default": "direct"
+        "description": "API Gateway URL"
       }
     },
-    "required": ["apiKey", "baseUrl"]
+    "required": ["apiKey", "baseUrl", "supabaseKey", "apiGatewayUrl"]
   },
 
   "activation": {
