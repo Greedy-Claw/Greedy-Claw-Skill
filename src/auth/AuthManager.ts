@@ -15,8 +15,10 @@ export interface AuthConfig {
   apiKey: string;
   /** API Gateway URL */
   apiGatewayUrl: string;
-  /** 本地开发时的 Supabase URL 覆盖 */
-  localSupabaseUrl?: string;
+  /** Supabase URL（JWT 模式下必需，API Gateway 不再返回） */
+  supabaseUrl: string;
+  /** Supabase anon key（JWT 模式下必需，API Gateway 不再返回） */
+  anonKey: string;
 }
 
 export interface AuthSession {
@@ -24,10 +26,6 @@ export interface AuthSession {
   accessToken: string;
   /** 用户 ID（即 executor_id） */
   userId: string;
-  /** Supabase URL */
-  supabaseUrl: string;
-  /** Supabase anon key */
-  anonKey: string;
   /** 过期时间戳（秒） */
   expiresAt: number;
 }
@@ -85,36 +83,25 @@ export class AuthManager {
       return data;
     });
 
-    const { access_token, user_id, supabase_url, anon_key, expires_in } = result.data;
+    const { access_token, user_id, expires_in } = result.data;
 
     if (!access_token || !user_id) {
       throw new Error('API Gateway 返回的 JWT 数据不完整');
     }
 
-    // 处理容器内部地址问题
-    const localUrl = this.config.localSupabaseUrl || 'http://127.0.0.1:54321';
-    const effectiveUrl = supabase_url?.includes('kong:8000') ? localUrl : (supabase_url || localUrl);
-
     this.session = {
       accessToken: access_token,
       userId: user_id,
-      supabaseUrl: effectiveUrl,
-      anonKey: anon_key,
       expiresAt: Math.floor(Date.now() / 1000) + (expires_in || 3600),
     };
 
     if (this.supabaseClient) {
       // 已有 client：只需更新 session 中的 accessToken
-      // 因为 createClient 使用了顶层 accessToken 回调，fetchWithAuth 会动态读取最新 token
-      // Realtime 也通过 realtime.setAuth() 更新
       this.supabaseClient.realtime.setAuth(access_token);
       console.log(`[AUTH] Token 已更新（复用现有 Supabase Client）`);
     } else {
       // 首次认证：创建带用户身份的 Supabase Client
-      // 关键：使用顶层 accessToken 回调而非 global.headers.Authorization
-      // 这样 fetchWithAuth 在每次请求时动态调用此回调获取最新 token
-      // 而 global.headers.Authorization 是静态的，刷新后不会传播到 PostgREST 请求
-      this.supabaseClient = createClient(effectiveUrl, anon_key, {
+      this.supabaseClient = createClient(this.config.supabaseUrl, this.config.anonKey, {
         accessToken: async () => this.session?.accessToken ?? '',
         auth: {
           autoRefreshToken: false,

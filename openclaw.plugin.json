@@ -2,22 +2,63 @@
   "$schema": "https://openclaw.ai/schema/plugin-manifest.json",
   "id": "greedyclaw",
   "name": "GreedyClaw",
-  "version": "2.0.0",
-  "description": "在线接单平台智能竞标助手 - Sidecar 架构，Agent 决策，API 透传",
+  "version": "4.0.0",
+  "description": "在线接单平台智能竞标助手 - In-Process Channel Plugin，无 sidecar 子进程",
   "author": "OpenClaw",
   "license": "MIT",
   "type": "skill",
-  "entry": "dist/plugin/index.js",
+  "entry": "index.js",
   "icon": "🦀",
-  
-  "skills": ["."],
-  
+  "skills": [
+    "."
+  ],
+  "channels": [
+    "greedyclaw"
+  ],
+  "channelConfigs": {
+    "greedyclaw": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "description": "Supabase URL（JWT 模式和直接模式均必需）"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "JWT 模式下为 sk_live_xxx API Key；直接模式下为 Supabase anon key"
+          },
+          "apiGatewayUrl": {
+            "type": "string",
+            "description": "API Gateway URL（JWT 模式必需）"
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "jwt",
+              "direct"
+            ],
+            "description": "认证模式：jwt（通过 API Gateway 获取 JWT）或 direct（直接连接 Supabase）",
+            "default": "direct"
+          }
+        },
+        "required": [
+          "apiKey",
+          "baseUrl"
+        ]
+      },
+      "label": "GreedyClaw",
+      "description": "在线接单平台智能竞标助手"
+    }
+  },
   "requires": {
     "node": ">=18.0.0",
-    "bins": ["node"],
+    "bins": [
+      "node"
+    ],
     "runtimeDependencies": []
   },
-  
   "contracts": {
     "provides": {
       "events": [
@@ -44,71 +85,26 @@
         "greedyclaw_list_files",
         "greedyclaw_download_file",
         "greedyclaw_delete_file"
-      ],
-      "apiEndpoints": [
-        {
-          "path": "/health",
-          "method": "GET",
-          "description": "健康检查"
-        },
-        {
-          "path": "/tasks",
-          "method": "GET",
-          "description": "获取开放任务列表"
-        },
-        {
-          "path": "/bid",
-          "method": "POST",
-          "description": "提交竞标"
-        },
-        {
-          "path": "/message",
-          "method": "POST",
-          "description": "发送消息"
-        },
-        {
-          "path": "/submit",
-          "method": "POST",
-          "description": "提交任务结果"
-        },
-        {
-          "path": "/files/upload",
-          "method": "POST",
-          "description": "上传交付文件"
-        },
-        {
-          "path": "/files/download/:id",
-          "method": "GET",
-          "description": "下载交付文件"
-        },
-        {
-          "path": "/files/list",
-          "method": "GET",
-          "description": "列出交付文件"
-        },
-        {
-          "path": "/files/delete/:id",
-          "method": "DELETE",
-          "description": "删除交付文件"
-        }
       ]
     },
     "consumes": {
       "tools": [],
-      "hooks": ["gateway_start"]
+      "hooks": [
+        "gateway_start"
+      ]
     }
   },
-  
   "configSchema": {
     "type": "object",
+    "additionalProperties": false,
     "properties": {
       "baseUrl": {
         "type": "string",
-        "description": "Supabase URL（直接模式必需）"
+        "description": "Supabase URL（JWT 模式和直接模式均必需）"
       },
       "apiKey": {
         "type": "string",
-        "description": "API Key：JWT 模式下为 sk_live_xxx，直接模式下为 Supabase service_role key"
+        "description": "JWT 模式下为 sk_live_xxx API Key；直接模式下为 Supabase anon key"
       },
       "apiGatewayUrl": {
         "type": "string",
@@ -117,35 +113,25 @@
       "authMode": {
         "type": "string",
         "enum": ["jwt", "direct"],
-        "description": "认证模式：jwt（通过 API Gateway）或 direct（直接连接 Supabase）",
+        "description": "认证模式：jwt（通过 API Gateway 获取 JWT）或 direct（直接连接 Supabase）",
         "default": "direct"
-      },
-      "localSupabaseUrl": {
-        "type": "string",
-        "description": "本地 Supabase URL 覆盖（JWT 模式下替换容器内 kong 地址）"
-      },
-      "sidecarPort": {
-        "type": "number",
-        "description": "Sidecar 端口",
-        "default": 22000
-      },
-      "pluginPort": {
-        "type": "number",
-        "description": "OpenClaw Plugin 端口",
-        "default": 18789
       }
     },
-    "required": ["apiKey"]
+    "required": ["apiKey", "baseUrl"]
   },
-  
-  "sidecar": {
-    "script": "dist/sidecar/server.cjs",
-    "port": 22000,
-    "healthCheck": "/health"
+
+  "activation": {
+    "onStartup": true,
+    "onChannels": [
+      "greedyclaw"
+    ]
   },
-  
   "compatibility": {
     "openclawVersion": ">=2026.1",
-    "platforms": ["linux", "macos", "windows"]
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
   }
 }
