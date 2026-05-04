@@ -1,14 +1,16 @@
 /**
  * GreedyClaw Channel Plugin Entry — In-Process 架构
  *
- * 架构（v3 → v4）：
+ * 架构（v4 → v5）：
  * - 去掉 sidecar 子进程，所有逻辑在主进程内运行
  * - Realtime 监听 + 心跳 + JWT 刷新通过 monitor 长驻函数管理
  * - 工具调用直接走 Supabase client，无 HTTP 中转
  * - Monitor 生命周期由 startAccount/stopAccount 管理
+ * - v5: 采用 Weixin 风格的消息注入管道：
+ *   resolveAgentRoute → finalizeInboundContext → recordInboundSession → dispatchReplyFromConfig
+ *   替代低级 channel.turn.run API，解决 agent auth 查找失败的问题
  */
 
-import { randomUUID } from 'crypto';
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -115,7 +117,8 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     return;
   }
 
-  // 定义事件回调 — Realtime 事件 → channel.turn.run 注入
+  // 定义事件回调 — Realtime 事件 → 高级管道注入
+  // 采用 Weixin 风格: resolveAgentRoute → finalizeInboundContext → recordInboundSession → dispatchReplyFromConfig
   const onEvent = async (type: string, data: EventData) => {
     const taskKey = data.task_id || data.id;
     const text = formatEvent(type, data);
@@ -127,131 +130,118 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
 
     try {
       const runtime = runtimeStore.getRuntime();
-      const routeSessionKey = `agent:main:channel:greedyclaw:task:${taskKey}`;
+      const channelRuntime = runtime.channel;
 
-      const ctxPayload = runtime.channel.turn.buildContext({
+      // 1. 通过框架 API 解析路由 — peer.kind="group" 确保每个 task 独立 session
+      const route = channelRuntime.routing.resolveAgentRoute({
+        cfg: runtime.config,
         channel: "greedyclaw",
         accountId: null,
-        timestamp: Date.now(),
-        from: `greedyclaw:${data.sender_id || "system"}`,
-        sender: {
+        peer: { kind: "group", id: `task:${taskKey}` },
+      });
+
+      console.log(`[GreedyClaw] Route resolved: agentId=${route.agentId} sessionKey=${route.sessionKey}`);
+
+      // 2. 构建入站上下文
+      const ctx: Record<string, any> = {
+        Channel: "greedyclaw",
+        AccountId: null,
+        Timestamp: Date.now(),
+        From: `greedyclaw:${data.sender_id || "system"}`,
+        To: `greedyclaw:task:${taskKey}`,
+        Body: text,
+        CommandBody: text,
+        CommandAuthorized: true,
+        SessionKey: route.sessionKey,
+        Sender: {
           id: data.sender_id || "greedyclaw-system",
           name: "GreedyClaw",
           isBot: true,
           isSelf: false,
           displayLabel: "GreedyClaw",
         },
-        conversation: {
-          kind: "direct",
+        Conversation: {
+          kind: "group",
           id: `task:${taskKey}`,
         },
-        route: {
-          agentId: "main",
-          accountId: null,
-          routeSessionKey,
+        Route: {
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
         },
-        reply: {
+        Reply: {
           to: `greedyclaw:task:${taskKey}`,
         },
-        message: {
-          rawBody: text,
-          bodyForAgent: text,
-        },
-        access: {
+        Access: {
+          dm: { policy: "allow" },
+          group: { allowed: true },
+          commands: { authorized: true },
           mentions: { wasMentioned: true },
         },
-      });
+      };
 
-      await runtime.channel.turn.run({
-        channel: "greedyclaw",
-        accountId: null,
-        raw: { type, data },
-        adapter: {
-          ingest(raw) {
-            return {
-              id: data.id || randomUUID(),
-              timestamp: Date.now(),
-              rawText: text,
-              textForAgent: text,
-              textForCommands: text,
-            };
-          },
-          classify(input) {
-            return { kind: "message", canStartAgentTurn: true };
-          },
-          resolveTurn(input) {
-            const noopDispatcher = {
-              sendToolResult: () => false,
-              sendBlockReply: () => false,
-              sendFinalReply: () => false,
-              waitForIdle: async () => {},
-              getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-              getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-              markComplete: () => {},
-            };
+      // 3. finalizeInboundContext — 框架标准化上下文
+      const finalized = channelRuntime.reply.finalizeInboundContext(ctx as any);
 
-            return {
-              channel: "greedyclaw",
-              accountId: null,
-              routeSessionKey,
-              storePath: runtime.channel.session?.resolveStorePath?.(
-                runtime.config?.session?.store,
-                { agentId: "main" },
-              ),
-              ctxPayload,
-              recordInboundSession: runtime.channel.session?.recordInboundSession,
-              record: { createIfMissing: true },
-              runDispatch: () => runtime.channel.reply!.withReplyDispatcher({
-                dispatcher: noopDispatcher,
-                run: () => runtime.channel.reply!.dispatchReplyFromConfig({
-                  ctx: ctxPayload,
-                  cfg: runtime.config,
-                  dispatcher: noopDispatcher,
-                }),
-              }),
-              sender: {
-                id: data.sender_id || "greedyclaw-system",
-                name: "GreedyClaw",
-                isBot: true,
-                isSelf: false,
-                displayLabel: "GreedyClaw",
-              },
-              conversation: {
-                kind: "direct",
-                id: `task:${taskKey}`,
-              },
-              route: {
-                agentId: "main",
-                routeSessionKey,
-                createIfMissing: true,
-              },
-              reply: {
-                to: `greedyclaw:task:${taskKey}`,
-              },
-              message: {
-                body: text,
-                rawBody: text,
-                bodyForAgent: text,
-              },
-              access: {
-                dm: { policy: "allow" },
-                group: { allowed: true },
-                commands: { authorized: true },
-                mentions: { wasMentioned: true },
-              },
-              delivery: {
-                deliver: async (_payload: any, _info: any) => {
-                  return { visibleReplySent: false };
-                },
-              },
-            };
-          },
+      // 4. recordInboundSession — 持久化 session 记录
+      const storePath = channelRuntime.session.resolveStorePath(
+        runtime.config?.session?.store,
+        { agentId: route.agentId },
+      );
+
+      await channelRuntime.session.recordInboundSession({
+        storePath,
+        sessionKey: route.sessionKey,
+        ctx: finalized,
+        updateLastRoute: {
+          sessionKey: route.mainSessionKey,
+          channel: "greedyclaw",
+          to: `greedyclaw:task:${taskKey}`,
+          accountId: null,
+        },
+        onRecordError: (err: any) => {
+          console.error(`[GreedyClaw] recordInboundSession error:`, err);
         },
       });
 
-      console.log(`[GreedyClaw] Event processed: ${type}, task=${taskKey}`);
+      // 5. 创建 reply dispatcher（GreedyClaw 不需要真正发送回复到外部平台）
+      const noopDeliver = async (_payload: any) => {
+        // GreedyClaw 是程序化通道，不需要向外部平台发送可见回复
+      };
+
+      const { dispatcher, replyOptions, markDispatchIdle } =
+        channelRuntime.reply.createReplyDispatcherWithTyping({
+          humanDelay: channelRuntime.reply.resolveHumanDelayConfig(runtime.config, route.agentId),
+          typingCallbacks: {
+            start: async () => {},
+            stop: async () => {},
+            onStartError: () => {},
+            onStopError: () => {},
+          },
+          deliver: noopDeliver,
+          onError: (err: any, info: any) => {
+            console.error(`[GreedyClaw] Reply error (${info.kind}):`, err);
+          },
+        });
+
+      // 6. dispatchReplyFromConfig — 触发 agent 生成回复
+      try {
+        await channelRuntime.reply.withReplyDispatcher({
+          dispatcher,
+          run: () =>
+            channelRuntime.reply.dispatchReplyFromConfig({
+              ctx: finalized,
+              cfg: runtime.config,
+              dispatcher,
+              replyOptions: { ...replyOptions, disableBlockStreaming: true },
+            }),
+        });
+      } finally {
+        markDispatchIdle();
+      }
+
+      console.log(`[GreedyClaw] Event processed: ${type}, task=${taskKey}, agentId=${route.agentId}`);
     } catch (err: any) {
-      console.error(`[GreedyClaw] Channel turn error:`, err);
+      console.error(`[GreedyClaw] Message pipeline error:`, err);
     }
   };
 

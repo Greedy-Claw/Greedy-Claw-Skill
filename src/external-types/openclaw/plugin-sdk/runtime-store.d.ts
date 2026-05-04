@@ -7,6 +7,56 @@
 
 declare module "openclaw/plugin-sdk/runtime-store" {
 
+  /** Resolved agent route from resolveAgentRoute */
+  export interface ResolvedAgentRoute {
+    agentId: string;
+    channel: string;
+    accountId: string;
+    sessionKey: string;
+    mainSessionKey: string;
+    lastRoutePolicy: "main" | "session";
+    matchedBy:
+      | "binding.peer"
+      | "binding.peer.parent"
+      | "binding.peer.wildcard"
+      | "binding.guild+roles"
+      | "binding.guild"
+      | "binding.team"
+      | "binding.account"
+      | "binding.channel"
+      | "default";
+  }
+
+  /** Route peer specification */
+  export interface RoutePeer {
+    kind: "direct" | "group" | "channel";
+    id: string;
+  }
+
+  /** Reply dispatcher created by createReplyDispatcherWithTyping */
+  export interface ReplyDispatcher {
+    sendToolResult: (result: any) => boolean;
+    sendBlockReply: (reply: any) => boolean;
+    sendFinalReply: (reply: any) => boolean;
+    waitForIdle: () => Promise<void>;
+    getQueuedCounts: () => { tool: number; block: number; final: number };
+    getFailedCounts: () => { tool: number; block: number; final: number };
+    markComplete: () => void;
+  }
+
+  /** Inbound context (MsgContext-like) after finalization */
+  export interface FinalizedInboundContext {
+    From: string;
+    To: string;
+    Body?: string;
+    SessionKey?: string;
+    CommandBody?: string;
+    CommandAuthorized?: boolean;
+    MediaPath?: string;
+    MediaUrl?: string;
+    [key: string]: any;
+  }
+
   export interface PluginRuntime {
     channel: {
       turn: {
@@ -14,13 +64,61 @@ declare module "openclaw/plugin-sdk/runtime-store" {
         runPrepared(options: any): Promise<any>;
         buildContext(options: any): any;
       };
-      session?: {
-        resolveStorePath(storeConfig: any, options: { agentId: string }): string | undefined;
-        recordInboundSession(params: any): Promise<void>;
+      routing: {
+        resolveAgentRoute(params: {
+          cfg: any;
+          channel: string;
+          accountId?: string | null;
+          peer?: RoutePeer | null;
+          parentPeer?: RoutePeer | null;
+          guildId?: string | null;
+          teamId?: string | null;
+          memberRoleIds?: string[];
+        }): ResolvedAgentRoute;
+        buildAgentSessionKey(params: {
+          agentId: string;
+          channel: string;
+          accountId?: string | null;
+          peer?: RoutePeer | null;
+          dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+          identityLinks?: Record<string, string[]>;
+        }): string;
       };
-      reply?: {
+      session: {
+        resolveStorePath(storeConfig: any, options: { agentId: string }): string | undefined;
+        recordInboundSession(params: {
+          storePath: string | undefined;
+          sessionKey: string;
+          ctx: any;
+          updateLastRoute?: {
+            sessionKey: string;
+            channel: string;
+            to: string;
+            accountId: string | null;
+          };
+          onRecordError?: (err: any) => void;
+        }): Promise<void>;
+      };
+      reply: {
         withReplyDispatcher(options: { dispatcher: any; run: () => any }): any;
-        dispatchReplyFromConfig(options: { ctx: any; cfg: any; dispatcher: any }): any;
+        dispatchReplyFromConfig(options: {
+          ctx: any;
+          cfg: any;
+          dispatcher: any;
+          replyOptions?: any;
+        }): Promise<any>;
+        finalizeInboundContext(ctx: any): FinalizedInboundContext;
+        createReplyDispatcherWithTyping(options: {
+          humanDelay: any;
+          typingCallbacks: any;
+          deliver: (payload: any) => Promise<void>;
+          onError?: (err: any, info: any) => void;
+        }): {
+          dispatcher: ReplyDispatcher;
+          replyOptions: any;
+          markDispatchIdle: () => void;
+        };
+        resolveHumanDelayConfig(cfg: any, agentId?: string | null): any;
       };
       mentions?: any;
     };
