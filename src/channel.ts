@@ -76,12 +76,13 @@ export function deleteAccountAbortController(accountId: string | null): void {
 // ========================================
 // ResolvedAccount
 // ========================================
+const DEFAULT_API_GATEWAY_URL = "https://api.greedyclaw.com/api-gateway";
+
 export type ResolvedAccount = {
   accountId: string | null;
   authMode: string;
   apiKey: string;
-  apiGatewayUrl?: string;
-  baseUrl?: string;
+  apiGatewayUrl: string;
 };
 
 function resolveAccount(
@@ -94,10 +95,9 @@ function resolveAccount(
 
   return {
     accountId: accountId ?? null,
-    authMode: source.authMode || (source.apiGatewayUrl ? "jwt" : "direct"),
+    authMode: source.authMode || "jwt",
     apiKey: source.apiKey,
-    apiGatewayUrl: source.apiGatewayUrl,
-    baseUrl: source.baseUrl,
+    apiGatewayUrl: source.apiGatewayUrl || DEFAULT_API_GATEWAY_URL,
   };
 }
 

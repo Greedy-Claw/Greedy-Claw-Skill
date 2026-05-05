@@ -10,15 +10,13 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { withRetry } from '../utils/retry.js';
 
+const DEFAULT_API_GATEWAY_URL = "https://api.greedyclaw.com/api-gateway";
+
 export interface AuthConfig {
   /** API Key（sk_live_xxx 格式） */
   apiKey: string;
-  /** API Gateway URL */
-  apiGatewayUrl: string;
-  /** Supabase URL（JWT 模式下必需，API Gateway 不再返回） */
-  supabaseUrl: string;
-  /** Supabase anon key（JWT 模式下必需，API Gateway 不再返回） */
-  anonKey: string;
+  /** API Gateway URL（默认: https://api.greedyclaw.com/api-gateway） */
+  apiGatewayUrl?: string;
 }
 
 export interface AuthSession {
@@ -35,8 +33,11 @@ export class AuthManager {
   private session: AuthSession | null = null;
   private supabaseClient: SupabaseClient | null = null;
 
+  private gatewayUrl: string;
+
   constructor(config: AuthConfig) {
     this.config = config;
+    this.gatewayUrl = config.apiGatewayUrl || DEFAULT_API_GATEWAY_URL;
   }
 
   /**
@@ -66,7 +67,7 @@ export class AuthManager {
     console.log('[AUTH] 正在通过 API Gateway 获取 JWT...');
 
     const result = await withRetry(async () => {
-      const response = await fetch(`${this.config.apiGatewayUrl}/auth/token`, {
+      const response = await fetch(`${this.gatewayUrl}/auth/token`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.config.apiKey}`,
@@ -83,10 +84,14 @@ export class AuthManager {
       return data;
     });
 
-    const { access_token, user_id, expires_in } = result.data;
+    const { access_token, user_id, expires_in, supabase_url, anon_key } = result.data;
 
     if (!access_token || !user_id) {
       throw new Error('API Gateway 返回的 JWT 数据不完整');
+    }
+
+    if (!supabase_url || !anon_key) {
+      throw new Error('API Gateway 返回的连接信息不完整（缺少 supabase_url 或 anon_key）');
     }
 
     this.session = {
@@ -100,8 +105,8 @@ export class AuthManager {
       this.supabaseClient.realtime.setAuth(access_token);
       console.log(`[AUTH] Token 已更新（复用现有 Supabase Client）`);
     } else {
-      // 首次认证：创建带用户身份的 Supabase Client
-      this.supabaseClient = createClient(this.config.supabaseUrl, this.config.anonKey, {
+      // 首次认证：用 API Gateway 返回的 supabase_url 和 anon_key 创建 Client
+      this.supabaseClient = createClient(supabase_url, anon_key, {
         accessToken: async () => this.session?.accessToken ?? '',
         auth: {
           autoRefreshToken: false,

@@ -31,10 +31,8 @@ import {
 // 类型
 // ========================================
 interface PluginConfig {
-  baseUrl: string;
   apiKey: string;
-  supabaseKey: string;
-  apiGatewayUrl: string;
+  apiGatewayUrl?: string;
   sidecarPort?: number;  // 保留字段兼容旧配置，但不再使用
   pluginPort?: number;   // 保留字段兼容旧配置，但不再使用
 }
@@ -89,8 +87,6 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     await initializeSupabase({
       apiKey: config.apiKey,
       apiGatewayUrl: config.apiGatewayUrl,
-      supabaseUrl: config.baseUrl,
-      supabaseKey: config.supabaseKey,
     });
   } catch (err) {
     console.error('[GreedyClaw] Supabase 初始化失败:', err);

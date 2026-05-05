@@ -45,21 +45,17 @@ const JWT_REFRESH_INTERVAL_MS = 55 * 60_000;
 // ========================================
 interface InitOpts {
   apiKey: string;
-  apiGatewayUrl: string;
-  supabaseUrl: string;
-  supabaseKey: string;
+  apiGatewayUrl?: string;
 }
 
 export async function initializeSupabase(opts: InitOpts): Promise<void> {
-  const { apiKey, apiGatewayUrl, supabaseUrl, supabaseKey } = opts;
+  const { apiKey, apiGatewayUrl } = opts;
 
   console.log('[GreedyClaw] 使用 JWT 认证模式');
 
   const authManager = new AuthManager({
     apiKey,
     apiGatewayUrl,
-    supabaseUrl,
-    anonKey: supabaseKey,
   });
 
   await authManager.authenticate();
