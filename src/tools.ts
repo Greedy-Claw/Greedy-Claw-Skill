@@ -225,30 +225,28 @@ export function createTools() {
           const storageFileName = randomUUID() + ext;
           const storagePath = `${bid.task_id}/${args.bidId}/executor/${storageFileName}`;
 
-          // 上传
+          // 上传 — 触发器 trg_storage_object_insert 会自动在 storage_files 中创建记录
           const fileBuffer = Buffer.from(args.fileBase64, 'base64');
           const { error: uploadError } = await supabase.storage
             .from('task-deliveries')
             .upload(storagePath, fileBuffer, {
               contentType: getContentType(args.fileName),
               upsert: false,
+              metadata: {
+                original_name: args.fileName,
+                ...(args.description ? { description: args.description } : {}),
+              },
             });
           if (uploadError) return err(`Storage upload failed: ${uploadError.message}`);
 
-          // 创建 storage_files 记录
-          const { data: fileRecord, error: insertError } = await supabase
+          // 查询触发器自动创建的 storage_files 记录
+          const { data: fileRecord, error: queryError } = await supabase
             .from('storage_files')
-            .insert({
-              bid_id: args.bidId,
-              storage_path: storagePath,
-              created_by: executorId,
-              user_metadata: { original_name: args.fileName, ...(args.description ? { description: args.description } : {}) },
-            })
-            .select()
+            .select('id, storage_path, created_at')
+            .eq('storage_path', storagePath)
             .single();
-          if (insertError) {
-            await supabase.storage.from('task-deliveries').remove([storagePath]);
-            return err(`Failed to create file record: ${insertError.message}`);
+          if (queryError || !fileRecord) {
+            return err(`File uploaded but record lookup failed: ${queryError?.message || 'not found'}`);
           }
 
           return ok(JSON.stringify({
