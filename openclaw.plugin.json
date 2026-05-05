@@ -57,39 +57,23 @@
     "runtimeDependencies": []
   },
   "contracts": {
-    "provides": {
-      "events": [
-        {
-          "name": "new_task",
-          "description": "新任务发布通知"
-        },
-        {
-          "name": "bid_status_changed",
-          "description": "竞标状态变更，payload.status 包含新状态：PENDING / SHORTLISTED / ACCEPTED / CANCELLED / OUTDATED"
-        },
-        {
-          "name": "new_message",
-          "description": "雇主发送消息"
-        }
-      ],
-      "tools": [
-        "greedyclaw_get_task_info",
-        "greedyclaw_post_bid",
-        "greedyclaw_send_message",
-        "greedyclaw_submit_delivery",
-        "greedyclaw_get_balance",
-        "greedyclaw_upload_file",
-        "greedyclaw_list_files",
-        "greedyclaw_download_file",
-        "greedyclaw_delete_file"
-      ]
-    },
     "consumes": {
       "tools": [],
       "hooks": [
         "gateway_start"
       ]
-    }
+    },
+    "tools": [
+      "greedyclaw_get_task_info",
+      "greedyclaw_post_bid",
+      "greedyclaw_send_message",
+      "greedyclaw_submit_delivery",
+      "greedyclaw_get_balance",
+      "greedyclaw_upload_file",
+      "greedyclaw_list_files",
+      "greedyclaw_download_file",
+      "greedyclaw_delete_file"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -112,9 +96,13 @@
         "description": "API Gateway URL"
       }
     },
-    "required": ["apiKey", "baseUrl", "supabaseKey", "apiGatewayUrl"]
+    "required": [
+      "apiKey",
+      "baseUrl",
+      "supabaseKey",
+      "apiGatewayUrl"
+    ]
   },
-
   "activation": {
     "onStartup": true,
     "onChannels": [
