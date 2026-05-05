@@ -131,10 +131,11 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     try {
       const runtime = runtimeStore.getRuntime();
       const channelRuntime = runtime.channel;
+      const cfg = typeof runtime.config?.current === "function" ? runtime.config.current() : runtime.config;
 
-      // 1. 通过框架 API 解析路由 — peer.kind="group" 确保每个 task 独立 session
+      // 1. 通过框架 API 解析路由 — peer.kind="group" 确保每个 task 独立 session（与飞书一致）
       const route = channelRuntime.routing.resolveAgentRoute({
-        cfg: runtime.config,
+        cfg,
         channel: "greedyclaw",
         accountId: null,
         peer: { kind: "group", id: `task:${taskKey}` },
@@ -150,16 +151,15 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
         From: `greedyclaw:${data.sender_id || "system"}`,
         To: `greedyclaw:task:${taskKey}`,
         Body: text,
+        BodyForAgent: text,
+        RawBody: text,
         CommandBody: text,
         CommandAuthorized: true,
         SessionKey: route.sessionKey,
-        Sender: {
-          id: data.sender_id || "greedyclaw-system",
-          name: "GreedyClaw",
-          isBot: true,
-          isSelf: false,
-          displayLabel: "GreedyClaw",
-        },
+
+        ChatType: "group",
+        SenderId: data.sender_id || "greedyclaw-system",
+        SenderName: "GreedyClaw",
         Conversation: {
           kind: "group",
           id: `task:${taskKey}`,
@@ -184,7 +184,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
 
       // 4. recordInboundSession — 持久化 session 记录
       const storePath = channelRuntime.session.resolveStorePath(
-        runtime.config?.session?.store,
+        cfg?.session?.store,
         { agentId: route.agentId },
       );
 
@@ -210,7 +210,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
 
       const { dispatcher, replyOptions, markDispatchIdle } =
         channelRuntime.reply.createReplyDispatcherWithTyping({
-          humanDelay: channelRuntime.reply.resolveHumanDelayConfig(runtime.config, route.agentId),
+          humanDelay: channelRuntime.reply.resolveHumanDelayConfig(cfg, route.agentId),
           typingCallbacks: {
             start: async () => {},
             stop: async () => {},
@@ -230,7 +230,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
           run: () =>
             channelRuntime.reply.dispatchReplyFromConfig({
               ctx: finalized,
-              cfg: runtime.config,
+              cfg,
               dispatcher,
               replyOptions: { ...replyOptions, disableBlockStreaming: true },
             }),
