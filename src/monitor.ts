@@ -72,6 +72,7 @@ export async function initializeSupabase(opts: InitOpts): Promise<void> {
 // ========================================
 export async function setupRealtimeListeners(
   onEvent: EventCallback,
+  onConnectionChange?: (connected: boolean) => void,
 ): Promise<void> {
   const supabase = getSupabase();
   const executorId = getExecutorId();
@@ -81,6 +82,17 @@ export async function setupRealtimeListeners(
     getLogger().info('已移除旧的 Realtime channels');
   } catch {
     // 忽略
+  }
+
+  // 记录已就绪的 channel 数量，全部 SUBSCRIBED 才算 connected
+  const channelNames = ['tasks-channel', 'bids-channel', 'bids-messages-channel'];
+  const subscribedChannels = new Set<string>();
+
+  function checkAllSubscribed() {
+    if (subscribedChannels.size === channelNames.length) {
+      getLogger().info('所有 Realtime channels 已订阅，连接就绪');
+      onConnectionChange?.(true);
+    }
   }
 
   // 监听新任务
@@ -95,6 +107,12 @@ export async function setupRealtimeListeners(
     )
     .subscribe((status) => {
       getLogger().info(`tasks-channel 订阅状态: ${status}`);
+      if (status === 'SUBSCRIBED') {
+        subscribedChannels.add('tasks-channel');
+        checkAllSubscribed();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onConnectionChange?.(false);
+      }
     });
 
   // 监听 bid 状态变化
@@ -115,6 +133,12 @@ export async function setupRealtimeListeners(
     )
     .subscribe((status) => {
       getLogger().info(`bids-channel 订阅状态: ${status}`);
+      if (status === 'SUBSCRIBED') {
+        subscribedChannels.add('bids-channel');
+        checkAllSubscribed();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onConnectionChange?.(false);
+      }
     });
 
   // 监听新消息
@@ -148,18 +172,31 @@ export async function setupRealtimeListeners(
     )
     .subscribe((status) => {
       getLogger().info(`bids-messages-channel 订阅状态: ${status}`);
+      if (status === 'SUBSCRIBED') {
+        subscribedChannels.add('bids-messages-channel');
+        checkAllSubscribed();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onConnectionChange?.(false);
+      }
     });
 }
 
 // ========================================
 // 心跳
 // ========================================
-async function sendHeartbeat(): Promise<void> {
+async function sendHeartbeat(
+  onHeartbeatResult?: (ok: boolean) => void,
+  onConnectionChange?: (connected: boolean) => void,
+): Promise<boolean> {
   const supabase = getSupabase();
   const executorId = getExecutorId();
   const authManager = getAuthManager();
 
-  if (!executorId) return;
+  if (!executorId) {
+    onHeartbeatResult?.(false);
+    onConnectionChange?.(false);
+    return false;
+  }
 
   try {
     const { error } = await supabase
@@ -171,20 +208,29 @@ async function sendHeartbeat(): Promise<void> {
         getLogger().info('心跳检测到 JWT 过期，刷新...');
         await authManager.refreshIfNeeded();
         setExecutorId(authManager.executorId);
-        await setupRealtimeListeners(_currentOnEvent!);
+        await setupRealtimeListeners(_currentOnEvent!, onConnectionChange);
         const retry = await supabase
           .from('heartbeat_buffer')
           .insert({ node_id: executorId });
         if (retry.error) throw retry.error;
         getLogger().info('心跳已发送（刷新后重试成功）');
+        onHeartbeatResult?.(true);
+        onConnectionChange?.(true);
+        return true;
       } else {
         throw error;
       }
     } else {
       getLogger().info('心跳已发送');
+      onHeartbeatResult?.(true);
+      onConnectionChange?.(true);
+      return true;
     }
   } catch (err) {
     getLogger().warn(`心跳发送失败: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+    onHeartbeatResult?.(false);
+    onConnectionChange?.(false);
+    return false;
   }
 }
 
@@ -198,21 +244,24 @@ function isJwtExpiredError(error: { code?: string; message?: string }): boolean 
 export interface MonitorOpts {
   onEvent: EventCallback;
   abortSignal: AbortSignal;
+  onHeartbeatResult?: (ok: boolean) => void;
+  /** 连接状态变更回调 — Realtime 订阅就绪 / 心跳确认 / 断开时触发 */
+  onConnectionChange?: (connected: boolean) => void;
 }
 
 export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
-  const { onEvent, abortSignal } = opts;
+  const { onEvent, abortSignal, onHeartbeatResult, onConnectionChange } = opts;
   const authManager = getAuthManager();
 
   _currentOnEvent = onEvent;
 
   getLogger().info('Monitor 启动');
 
-  // 1. 设置 Realtime 监听
-  await setupRealtimeListeners(onEvent);
+  // 1. 设置 Realtime 监听 — 传入 onConnectionChange，订阅就绪时标记 connected
+  await setupRealtimeListeners(onEvent, onConnectionChange);
 
-  // 2. 心跳循环
-  sendHeartbeat();
+  // 2. 首次心跳 — 成功即标记 connected
+  await sendHeartbeat(onHeartbeatResult, onConnectionChange);
 
   // 3. 主循环：心跳 + JWT 刷新
   let lastHeartbeat = Date.now();
@@ -226,7 +275,7 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
 
     // 心跳
     if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-      await sendHeartbeat();
+      await sendHeartbeat(onHeartbeatResult, onConnectionChange);
       lastHeartbeat = now;
     }
 
@@ -236,7 +285,7 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
         const refreshed = await authManager.refreshIfNeeded();
         if (refreshed) {
           setExecutorId(authManager.executorId);
-          await setupRealtimeListeners(onEvent);
+          await setupRealtimeListeners(onEvent, onConnectionChange);
           getLogger().info('JWT 刷新成功，Realtime 已重新订阅');
         }
       } catch (err) {
@@ -258,11 +307,11 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
     signal?.addEventListener(
       'abort',
-      () => { clearTimeout(t); reject(new Error('aborted')); },
+      () => { clearTimeout(t); resolve(); },
       { once: true },
     );
   });

@@ -1,21 +1,24 @@
 /**
  * GreedyClaw Channel Plugin Entry — In-Process 架构
  *
- * 架构（v4 → v5）：
+ * 架构（v7 — 与飞书一致）：
  * - 去掉 sidecar 子进程，所有逻辑在主进程内运行
  * - Realtime 监听 + 心跳 + JWT 刷新通过 monitor 长驻函数管理
  * - 工具调用直接走 Supabase client，无 HTTP 中转
- * - Monitor 生命周期由 startAccount/stopAccount 管理
- * - v5: 采用 Weixin 风格的消息注入管道：
+ * - 心跳驱动 connected 状态 + createComputedAccountStatusAdapter（与飞书一致）
+ * - 采用 Weixin 风格的消息注入管道：
  *   resolveAgentRoute → finalizeInboundContext → recordInboundSession → dispatchReplyFromConfig
- *   替代低级 channel.turn.run API，解决 agent auth 查找失败的问题
+ *
+ * 启动路径（与飞书一致）：
+ * - 框架调用 gateway.startAccount() → startMonitor() → monitorGreedyClaw() 长驻
+ * - startAccount 直接返回 startMonitor() Promise，框架据此判断 running 状态
+ * - 移除 gateway_start 事件，生命周期完全由框架 gateway 管理
  */
 
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import {
   greedyclawPlugin,
   markAccountConnected, markAccountDisconnected, markInboundReceived,
-  getAccountAbortController, setAccountAbortController, deleteAccountAbortController,
 } from "./channel.js";
 import { createTools } from "./tools.js";
 import { initializeSupabase, monitorGreedyClaw } from "./monitor.js";
@@ -36,10 +39,6 @@ interface PluginConfig {
   sidecarPort?: number;  // 保留字段兼容旧配置，但不再使用
   pluginPort?: number;   // 保留字段兼容旧配置，但不再使用
 }
-
-// ========================================
-// Runtime Store（已移至 state.ts）
-// ========================================
 
 // ========================================
 // 事件格式化
@@ -73,9 +72,26 @@ function formatEvent(type: string, data: EventData): string {
 }
 
 // ========================================
-// Monitor 启动逻辑（由 startAccount 调用）
+// Monitor 启动逻辑（与飞书 monitorFeishuProvider 一致）
 // ========================================
-async function startMonitor(accountId: string | null, config: PluginConfig): Promise<void> {
+function resolvePluginConfig(cfg: any): PluginConfig {
+  const section = (cfg.channels as Record<string, any>)?.["greedyclaw"];
+  const pluginCfg = (cfg.plugins as any)?.entries?.greedyclaw?.config;
+  const source = section || pluginCfg || {};
+  return {
+    apiKey: source.apiKey ?? "",
+    apiGatewayUrl: source.apiGatewayUrl,
+  };
+}
+
+export async function startMonitor(
+  accountId: string | null,
+  cfg: any,
+  abortSignal: AbortSignal,
+  setStatus?: (patch: any) => void,
+): Promise<void> {
+  const config = resolvePluginConfig(cfg);
+
   getLogger().info(`startMonitor: initializing for accountId=${accountId}...`);
 
   // 初始化 Supabase（仅 JWT 模式）
@@ -87,27 +103,45 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
   } catch (err) {
     getLogger().error('Supabase 初始化失败:', { error: String(err) });
     markAccountDisconnected(accountId);
-    return;
+    throw err; // 抛出让框架记录 lastError
   }
 
   getLogger().info(`Supabase 初始化完成, executorId=${getExecutorId() || 'anonymous'}`);
 
-  // 获取 AbortController
-  const controller = getAccountAbortController(accountId);
-  if (!controller || controller.signal.aborted) {
-    getLogger().warn('AbortController 不可用或已中止，Monitor 无法启动');
-    markAccountDisconnected(accountId);
-    return;
-  }
-
-  // 获取 channelRuntime
+  // 检查 channelRuntime 是否可用
   try {
     runtimeStore.getRuntime();
   } catch (err) {
     getLogger().error('获取 channelRuntime 失败:', { error: String(err) });
     markAccountDisconnected(accountId);
-    return;
+    throw err;
   }
+
+  // 心跳回调：更新插件本地状态（框架 runtime store 由 onConnectionChange 管理）
+  const onHeartbeatResult = (ok: boolean) => {
+    if (ok) {
+      markAccountConnected(accountId);
+    } else {
+      markAccountDisconnected(accountId);
+    }
+  };
+
+  // 连接状态变更回调 — 同步更新框架 runtime store
+  // 由 Realtime 订阅就绪 / 心跳成功 / 断开 触发
+  const onConnectionChange = (connected: boolean) => {
+    if (connected) {
+      setStatus?.({
+        accountId: accountId ?? "default",
+        connected: true,
+        lastConnectedAt: Date.now(),
+      });
+    } else {
+      setStatus?.({
+        accountId: accountId ?? "default",
+        connected: false,
+      });
+    }
+  };
 
   // 定义事件回调 — Realtime 事件 → 高级管道注入
   // 采用 Weixin 风格: resolveAgentRoute → finalizeInboundContext → recordInboundSession → dispatchReplyFromConfig
@@ -117,8 +151,13 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
 
     getLogger().info(`Received event: ${type}, task=${taskKey}`);
 
-    // 更新入站时间戳
+    // 更新入站时间戳（本地 + 框架 runtime store）
+    const now = Date.now();
     markInboundReceived(accountId);
+    setStatus?.({
+      accountId: accountId ?? "default",
+      lastInboundAt: now,
+    });
 
     try {
       const runtime = runtimeStore.getRuntime();
@@ -237,21 +276,15 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     }
   };
 
-  // 启动 monitor
-  monitorGreedyClaw({ onEvent, abortSignal: controller.signal }).then(() => {
-    // monitor 正常退出
-    if (!controller.signal.aborted) {
-      getLogger().info('Monitor exited unexpectedly, marking disconnected');
-      markAccountDisconnected(accountId);
-    }
-  }).catch((err) => {
-    if (!controller.signal.aborted) {
-      getLogger().error('Monitor crashed:', { error: String(err) });
-    }
-    markAccountDisconnected(accountId);
+  // 启动 monitor — 返回长驻 Promise，在 abortSignal 触发时 resolve
+  await monitorGreedyClaw({
+    onEvent,
+    abortSignal,
+    onHeartbeatResult,
+    onConnectionChange,
   });
 
-  getLogger().info('Monitor 已在后台启动');
+  getLogger().info('Monitor 已停止');
 }
 
 // ========================================
@@ -268,7 +301,7 @@ export default defineChannelPluginEntry({
     const config = api.pluginConfig as PluginConfig;
 
     // ========================================
-    // 1. 注册工具
+    // 注册工具
     // ========================================
     const tools = createTools();
     for (const tool of tools) {
@@ -276,23 +309,8 @@ export default defineChannelPluginEntry({
     }
     getLogger().info(`Registered ${tools.length} tools`);
 
-    // ========================================
-    // 2. 监听 gateway_start 启动 Monitor
-    //    gateway_start 没有 abortSignal，自建 AbortController
-    // ========================================
-    api.on('gateway_start', async (ctx: any) => {
-      getLogger().info('Gateway starting, initializing in-process monitor...');
-
-      // 自建 AbortController（startAccount 可能还没被调用）
-      const controller = new AbortController();
-      setAccountAbortController(null, controller);
-
-      // 如果 ctx 有 abortSignal，联动
-      if (ctx?.abortSignal && !ctx.abortSignal.aborted) {
-        ctx.abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
-      }
-
-      await startMonitor(null, config);
-    });
+    // v7: 移除 gateway_start 事件监听
+    // 生命周期完全由框架 gateway.startAccount() 管理（与飞书一致）
+    // startMonitor 已在 channel.ts 的 gateway.startAccount 中直接调用
   },
 });

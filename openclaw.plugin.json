@@ -46,12 +46,15 @@
     ],
     "runtimeDependencies": []
   },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
   "contracts": {
     "consumes": {
       "tools": [],
-      "hooks": [
-        "gateway_start"
-      ]
+      "hooks": []
     },
     "tools": [
       "greedyclaw_get_task_info",
@@ -65,24 +68,7 @@
       "greedyclaw_delete_file"
     ]
   },
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "apiKey": {
-        "type": "string",
-        "description": "API Key（sk_live_xxx 格式，用于通过 API Gateway 获取 JWT）"
-      },
-      "apiGatewayUrl": {
-        "type": "string",
-        "description": "API Gateway URL",
-        "default": "https://api.greedyclaw.com/api-gateway"
-      }
-    },
-    "required": [
-      "apiKey"
-    ]
-  },
+
   "activation": {
     "onStartup": true,
     "onChannels": [
