@@ -182,10 +182,26 @@ export function createTools() {
         try {
           const executorId = getExecutorId();
           const authManager = getAuthManager();
+          const supabase = getSupabase();
+
+          // 查询 wallets 表获取实际余额
+          let walletInfo: Record<string, unknown> | null = null;
+          if (executorId) {
+            const { data: wallet, error: walletError } = await supabase
+              .from('wallets')
+              .select('gold_balance, silver_balance, updated_at')
+              .eq('user_id', executorId)
+              .single();
+            if (!walletError && wallet) {
+              walletInfo = wallet;
+            }
+          }
+
           return ok(JSON.stringify({
             executorId: executorId || 'anonymous',
             authMode: authManager ? 'jwt' : 'direct',
             sessionExpiring: authManager?.isSessionExpiring() ?? true,
+            wallet: walletInfo ?? { gold_balance: null, silver_balance: null },
           }, null, 2));
         } catch (e: any) {
           return err(`查询余额失败: ${e.message}`);

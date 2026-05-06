@@ -66,7 +66,7 @@ export class AuthManager {
   async authenticate(): Promise<void> {
     console.log('[AUTH] 正在通过 API Gateway 获取 JWT...');
 
-    const result = await withRetry(async () => {
+    const rawResult = await withRetry(async () => {
       const response = await fetch(`${this.gatewayUrl}/auth/token`, {
         method: 'POST',
         headers: {
@@ -84,14 +84,26 @@ export class AuthManager {
       return data;
     });
 
-    const { access_token, user_id, expires_in, supabase_url, anon_key } = result.data;
+    // API Gateway 可能返回 { data: { ... } } 或直接返回 { access_token, ... }
+    // 兼容两种格式
+    const result = rawResult?.data ?? rawResult;
+
+    console.log(`[AUTH] API Gateway 响应字段: ${Object.keys(result).join(', ')}`);
+
+    const { access_token, user_id, expires_in, supabase_url, anon_key } = result;
 
     if (!access_token || !user_id) {
-      throw new Error('API Gateway 返回的 JWT 数据不完整');
+      throw new Error(
+        `API Gateway 返回的 JWT 数据不完整 (access_token=${!!access_token}, user_id=${!!user_id}). ` +
+        `原始响应: ${JSON.stringify(rawResult).slice(0, 500)}`
+      );
     }
 
     if (!supabase_url || !anon_key) {
-      throw new Error('API Gateway 返回的连接信息不完整（缺少 supabase_url 或 anon_key）');
+      throw new Error(
+        `API Gateway 返回的连接信息不完整 (supabase_url=${!!supabase_url}, anon_key=${!!anon_key}). ` +
+        `原始响应: ${JSON.stringify(rawResult).slice(0, 500)}`
+      );
     }
 
     this.session = {

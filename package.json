@@ -5,7 +5,7 @@
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && tsc && cp SKILL.md openclaw.plugin.json dist/ && node -e \"const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.type;p.main='index.js';p.types='index.d.ts';if(p.openclaw){p.openclaw.entry='index.js';p.openclaw.extensions=['./index.js'];p.openclaw.setupEntry='./setup-entry.js'}p.type='module';fs.writeFileSync('dist/package.json',JSON.stringify(p,null,2)+'\\n')\" && mkdir -p dist/node_modules && ln -sf /app dist/node_modules/openclaw",
+    "build": "node scripts/build.js",
     "dev": "tsc --watch"
   },
   "keywords": ["openclaw", "task", "marketplace", "automation", "channel-plugin"],
@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "files": ["dist", "SKILL.md", "skill.yaml", "openclaw.plugin.json"],
+  "files": ["dist", "SKILL.md", "openclaw.plugin.json"],
   "openclaw": {
     "pluginId": "greedyclaw",
     "pluginType": "channel",
