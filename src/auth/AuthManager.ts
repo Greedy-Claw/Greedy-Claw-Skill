@@ -9,6 +9,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { withRetry } from '../utils/retry.js';
+import { getLogger } from '../logger.js';
 
 const DEFAULT_API_GATEWAY_URL = "https://api.greedyclaw.com/api-gateway";
 
@@ -64,7 +65,7 @@ export class AuthManager {
    * 执行认证流程：API Key → JWT → Supabase Client
    */
   async authenticate(): Promise<void> {
-    console.log('[AUTH] 正在通过 API Gateway 获取 JWT...');
+    getLogger().info('正在通过 API Gateway 获取 JWT...');
 
     const rawResult = await withRetry(async () => {
       const response = await fetch(`${this.gatewayUrl}/auth/token`, {
@@ -88,7 +89,7 @@ export class AuthManager {
     // 兼容两种格式
     const result = rawResult?.data ?? rawResult;
 
-    console.log(`[AUTH] API Gateway 响应字段: ${Object.keys(result).join(', ')}`);
+    getLogger().info(`API Gateway 响应字段: ${Object.keys(result).join(', ')}`);
 
     const { access_token, user_id, expires_in, supabase_url, anon_key } = result;
 
@@ -115,7 +116,7 @@ export class AuthManager {
     if (this.supabaseClient) {
       // 已有 client：只需更新 session 中的 accessToken
       this.supabaseClient.realtime.setAuth(access_token);
-      console.log(`[AUTH] Token 已更新（复用现有 Supabase Client）`);
+      getLogger().info(`Token 已更新（复用现有 Supabase Client）`);
     } else {
       // 首次认证：用 API Gateway 返回的 supabase_url 和 anon_key 创建 Client
       this.supabaseClient = createClient(supabase_url, anon_key, {
@@ -130,8 +131,8 @@ export class AuthManager {
       });
     }
 
-    console.log(`[AUTH] 认证成功! executor_id: ${user_id}`);
-    console.log(`[AUTH] JWT 有效期: ${expires_in}s`);
+    getLogger().info(`认证成功! executor_id: ${user_id}`);
+    getLogger().info(`JWT 有效期: ${expires_in}s`);
   }
 
   /**
@@ -148,7 +149,7 @@ export class AuthManager {
    */
   async refreshIfNeeded(): Promise<boolean> {
     if (this.isSessionExpiring()) {
-      console.log('[AUTH] Session 即将过期，正在刷新...');
+      getLogger().info('Session 即将过期，正在刷新...');
       await this.authenticate();
       return true;
     }

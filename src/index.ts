@@ -12,8 +12,6 @@
  */
 
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   greedyclawPlugin,
   markAccountConnected, markAccountDisconnected, markInboundReceived,
@@ -25,7 +23,9 @@ import type { EventData } from "./monitor.js";
 import {
   setSupabase, setAuthManager, setExecutorId,
   getSupabase, getAuthManager, getExecutorId,
+  runtimeStore,
 } from "./state.js";
+import { getLogger } from "./logger.js";
 
 // ========================================
 // 类型
@@ -38,12 +38,8 @@ interface PluginConfig {
 }
 
 // ========================================
-// Runtime Store
+// Runtime Store（已移至 state.ts）
 // ========================================
-const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
-  pluginId: "greedyclaw",
-  errorMessage: "GreedyClaw runtime not initialized",
-});
 
 // ========================================
 // 事件格式化
@@ -80,7 +76,7 @@ function formatEvent(type: string, data: EventData): string {
 // Monitor 启动逻辑（由 startAccount 调用）
 // ========================================
 async function startMonitor(accountId: string | null, config: PluginConfig): Promise<void> {
-  console.log(`[GreedyClaw] startMonitor: initializing for accountId=${accountId}...`);
+  getLogger().info(`startMonitor: initializing for accountId=${accountId}...`);
 
   // 初始化 Supabase（仅 JWT 模式）
   try {
@@ -89,17 +85,17 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
       apiGatewayUrl: config.apiGatewayUrl,
     });
   } catch (err) {
-    console.error('[GreedyClaw] Supabase 初始化失败:', err);
+    getLogger().error('Supabase 初始化失败:', { error: String(err) });
     markAccountDisconnected(accountId);
     return;
   }
 
-  console.log(`[GreedyClaw] Supabase 初始化完成, executorId=${getExecutorId() || 'anonymous'}`);
+  getLogger().info(`Supabase 初始化完成, executorId=${getExecutorId() || 'anonymous'}`);
 
   // 获取 AbortController
   const controller = getAccountAbortController(accountId);
   if (!controller || controller.signal.aborted) {
-    console.warn('[GreedyClaw] AbortController 不可用或已中止，Monitor 无法启动');
+    getLogger().warn('AbortController 不可用或已中止，Monitor 无法启动');
     markAccountDisconnected(accountId);
     return;
   }
@@ -108,7 +104,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
   try {
     runtimeStore.getRuntime();
   } catch (err) {
-    console.error('[GreedyClaw] 获取 channelRuntime 失败:', err);
+    getLogger().error('获取 channelRuntime 失败:', { error: String(err) });
     markAccountDisconnected(accountId);
     return;
   }
@@ -119,7 +115,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
     const taskKey = data.task_id || data.id;
     const text = formatEvent(type, data);
 
-    console.log(`[GreedyClaw] Received event: ${type}, task=${taskKey}`);
+    getLogger().info(`Received event: ${type}, task=${taskKey}`);
 
     // 更新入站时间戳
     markInboundReceived(accountId);
@@ -137,7 +133,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
         peer: { kind: "group", id: `task:${taskKey}` },
       });
 
-      console.log(`[GreedyClaw] Route resolved: agentId=${route.agentId} sessionKey=${route.sessionKey}`);
+      getLogger().info(`Route resolved: agentId=${route.agentId} sessionKey=${route.sessionKey}`);
 
       // 2. 构建入站上下文
       const ctx: Record<string, any> = {
@@ -195,7 +191,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
           accountId: null,
         },
         onRecordError: (err: any) => {
-          console.error(`[GreedyClaw] recordInboundSession error:`, err);
+          getLogger().error(`recordInboundSession error:`, { error: String(err) });
         },
       });
 
@@ -215,7 +211,7 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
           },
           deliver: noopDeliver,
           onError: (err: any, info: any) => {
-            console.error(`[GreedyClaw] Reply error (${info.kind}):`, err);
+            getLogger().error(`Reply error (${info.kind}):`, { error: String(err) });
           },
         });
 
@@ -235,9 +231,9 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
         markDispatchIdle();
       }
 
-      console.log(`[GreedyClaw] Event processed: ${type}, task=${taskKey}, agentId=${route.agentId}`);
+      getLogger().info(`Event processed: ${type}, task=${taskKey}, agentId=${route.agentId}`);
     } catch (err: any) {
-      console.error(`[GreedyClaw] Message pipeline error:`, err);
+      getLogger().error(`Message pipeline error:`, { error: String(err) });
     }
   };
 
@@ -245,17 +241,17 @@ async function startMonitor(accountId: string | null, config: PluginConfig): Pro
   monitorGreedyClaw({ onEvent, abortSignal: controller.signal }).then(() => {
     // monitor 正常退出
     if (!controller.signal.aborted) {
-      console.log('[GreedyClaw] Monitor exited unexpectedly, marking disconnected');
+      getLogger().info('Monitor exited unexpectedly, marking disconnected');
       markAccountDisconnected(accountId);
     }
   }).catch((err) => {
     if (!controller.signal.aborted) {
-      console.error('[GreedyClaw] Monitor crashed:', err);
+      getLogger().error('Monitor crashed:', { error: String(err) });
     }
     markAccountDisconnected(accountId);
   });
 
-  console.log('[GreedyClaw] Monitor 已在后台启动');
+  getLogger().info('Monitor 已在后台启动');
 }
 
 // ========================================
@@ -278,14 +274,14 @@ export default defineChannelPluginEntry({
     for (const tool of tools) {
       api.registerTool(tool, { name: tool.name });
     }
-    console.log(`[GreedyClaw] Registered ${tools.length} tools`);
+    getLogger().info(`Registered ${tools.length} tools`);
 
     // ========================================
     // 2. 监听 gateway_start 启动 Monitor
     //    gateway_start 没有 abortSignal，自建 AbortController
     // ========================================
     api.on('gateway_start', async (ctx: any) => {
-      console.log('[GreedyClaw] Gateway starting, initializing in-process monitor...');
+      getLogger().info('Gateway starting, initializing in-process monitor...');
 
       // 自建 AbortController（startAccount 可能还没被调用）
       const controller = new AbortController();

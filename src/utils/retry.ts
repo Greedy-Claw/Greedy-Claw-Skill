@@ -4,6 +4,8 @@
  * 提供带指数退避的重试机制
  */
 
+import { getLogger } from '../logger.js';
+
 export interface RetryOptions {
   /** 最大重试次数 */
   maxRetries?: number;
@@ -52,7 +54,7 @@ export async function withRetry<T>(
         break;
       }
       
-      console.log(`[RETRY] Attempt ${attempt + 1}/${opts.maxRetries + 1} failed, retrying in ${delay}ms...`);
+      getLogger().warn(`Attempt ${attempt + 1}/${opts.maxRetries + 1} failed, retrying in ${delay}ms...`);
       
       await sleep(delay);
       delay = Math.min(delay * opts.backoffFactor, opts.maxDelay);

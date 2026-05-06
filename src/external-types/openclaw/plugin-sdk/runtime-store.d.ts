@@ -131,6 +131,13 @@ declare module "openclaw/plugin-sdk/runtime-store" {
     agent?: any;
     config?: any;
     log?: any;
+    logging?: {
+      shouldLogVerbose: () => boolean;
+      getChildLogger: (
+        bindings?: Record<string, unknown>,
+        opts?: { level?: LogLevel },
+      ) => RuntimeLogger;
+    };
     [key: string]: any;
   }
 
@@ -199,6 +206,15 @@ declare module "openclaw/plugin-sdk/runtime-store" {
     threadId?: string;
     replyToId?: string;
     visibleReplySent?: boolean;
+  }
+
+  export type LogLevel = "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
+
+  export interface RuntimeLogger {
+    debug?: (message: string, meta?: Record<string, unknown>) => void;
+    info: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+    error: (message: string, meta?: Record<string, unknown>) => void;
   }
 
   export interface PluginRuntimeStoreOptions {

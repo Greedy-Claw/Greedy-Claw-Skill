@@ -6,6 +6,16 @@
  */
 import { SupabaseClient } from '@supabase/supabase-js';
 import { AuthManager } from './auth/AuthManager.js';
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+
+// ========================================
+// Runtime Store
+// ========================================
+export const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "greedyclaw",
+  errorMessage: "GreedyClaw runtime not initialized",
+});
 
 let _supabase: SupabaseClient | null = null;
 let _authManager: AuthManager | null = null;

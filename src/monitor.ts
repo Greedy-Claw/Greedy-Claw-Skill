@@ -10,6 +10,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { AuthManager } from './auth/AuthManager.js';
 import { getSupabase, setSupabase, getAuthManager, setAuthManager, getExecutorId, setExecutorId } from './state.js';
+import { getLogger } from './logger.js';
 
 // ========================================
 // 类型
@@ -51,7 +52,7 @@ interface InitOpts {
 export async function initializeSupabase(opts: InitOpts): Promise<void> {
   const { apiKey, apiGatewayUrl } = opts;
 
-  console.log('[GreedyClaw] 使用 JWT 认证模式');
+  getLogger().info('使用 JWT 认证模式');
 
   const authManager = new AuthManager({
     apiKey,
@@ -63,7 +64,7 @@ export async function initializeSupabase(opts: InitOpts): Promise<void> {
   setAuthManager(authManager);
   setExecutorId(authManager.executorId);
 
-  console.log(`[GreedyClaw] 已认证用户: ${authManager.executorId}`);
+  getLogger().info(`已认证用户: ${authManager.executorId}`);
 }
 
 // ========================================
@@ -77,7 +78,7 @@ export async function setupRealtimeListeners(
 
   try {
     await supabase.removeAllChannels();
-    console.log('[GreedyClaw] 已移除旧的 Realtime channels');
+    getLogger().info('已移除旧的 Realtime channels');
   } catch {
     // 忽略
   }
@@ -88,12 +89,12 @@ export async function setupRealtimeListeners(
     .on('postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'tasks' },
       (payload) => {
-        console.log('[GreedyClaw] new_task:', payload.new.id);
+        getLogger().info(`new_task: ${payload.new.id}`);
         onEvent('new_task', payload.new as EventData);
       },
     )
     .subscribe((status) => {
-      console.log('[GreedyClaw] tasks-channel 订阅状态:', status);
+      getLogger().info(`tasks-channel 订阅状态: ${status}`);
     });
 
   // 监听 bid 状态变化
@@ -108,12 +109,12 @@ export async function setupRealtimeListeners(
 
         if (oldStatus === newStatus) return;
 
-        console.log('[GreedyClaw] bid_status_changed:', newBid.id, '→', newStatus);
+        getLogger().info(`bid_status_changed: ${newBid.id} → ${newStatus}`);
         onEvent('bid_status_changed', newBid);
       },
     )
     .subscribe((status) => {
-      console.log('[GreedyClaw] bids-channel 订阅状态:', status);
+      getLogger().info(`bids-channel 订阅状态: ${status}`);
     });
 
   // 监听新消息
@@ -141,12 +142,12 @@ export async function setupRealtimeListeners(
           }
         }
 
-        console.log('[GreedyClaw] new_message:', msg.id, 'task_id:', msg.task_id);
+        getLogger().info(`new_message: ${msg.id}, task_id: ${msg.task_id}`);
         onEvent('new_message', msg);
       },
     )
     .subscribe((status) => {
-      console.log('[GreedyClaw] bids-messages-channel 订阅状态:', status);
+      getLogger().info(`bids-messages-channel 订阅状态: ${status}`);
     });
 }
 
@@ -167,7 +168,7 @@ async function sendHeartbeat(): Promise<void> {
 
     if (error) {
       if (isJwtExpiredError(error) && authManager) {
-        console.log('[GreedyClaw] 心跳检测到 JWT 过期，刷新...');
+        getLogger().info('心跳检测到 JWT 过期，刷新...');
         await authManager.refreshIfNeeded();
         setExecutorId(authManager.executorId);
         await setupRealtimeListeners(_currentOnEvent!);
@@ -175,15 +176,15 @@ async function sendHeartbeat(): Promise<void> {
           .from('heartbeat_buffer')
           .insert({ node_id: executorId });
         if (retry.error) throw retry.error;
-        console.log('[GreedyClaw] 心跳已发送（刷新后重试成功）');
+        getLogger().info('心跳已发送（刷新后重试成功）');
       } else {
         throw error;
       }
     } else {
-      console.log('[GreedyClaw] 心跳已发送');
+      getLogger().info('心跳已发送');
     }
   } catch (err) {
-    console.log(`[GreedyClaw] 心跳发送失败: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+    getLogger().warn(`心跳发送失败: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
   }
 }
 
@@ -205,7 +206,7 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
 
   _currentOnEvent = onEvent;
 
-  console.log('[GreedyClaw] Monitor 启动');
+  getLogger().info('Monitor 启动');
 
   // 1. 设置 Realtime 监听
   await setupRealtimeListeners(onEvent);
@@ -236,10 +237,10 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
         if (refreshed) {
           setExecutorId(authManager.executorId);
           await setupRealtimeListeners(onEvent);
-          console.log('[GreedyClaw] JWT 刷新成功，Realtime 已重新订阅');
+          getLogger().info('JWT 刷新成功，Realtime 已重新订阅');
         }
       } catch (err) {
-        console.error('[GreedyClaw] JWT 刷新失败:', err);
+        getLogger().error('JWT 刷新失败:', { error: String(err) });
       }
       lastJwtCheck = now;
     }
@@ -253,7 +254,7 @@ export async function monitorGreedyClaw(opts: MonitorOpts): Promise<void> {
     // 忽略
   }
 
-  console.log('[GreedyClaw] Monitor 已停止');
+  getLogger().info('Monitor 已停止');
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
