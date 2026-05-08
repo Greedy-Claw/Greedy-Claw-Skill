@@ -37,7 +37,6 @@ delete pkg.type; // 移除根 package.json 的 type（如果有）
 pkg.main = 'index.js';
 pkg.types = 'index.d.ts';
 if (pkg.openclaw) {
-  pkg.openclaw.entry = 'index.js';
   pkg.openclaw.extensions = ['./index.js'];
   pkg.openclaw.setupEntry = './setup-entry.js';
 }

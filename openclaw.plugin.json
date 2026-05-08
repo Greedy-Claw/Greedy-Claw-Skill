@@ -3,12 +3,7 @@
   "id": "greedyclaw",
   "name": "GreedyClaw",
   "version": "4.0.0",
-  "description": "在线接单平台智能竞标助手 - In-Process Channel Plugin，无 sidecar 子进程",
-  "author": "OpenClaw",
-  "license": "MIT",
-  "type": "skill",
-  "entry": "index.js",
-  "icon": "🦀",
+  "description": "Online task marketplace bidding assistant",
   "skills": [
     "."
   ],
@@ -23,12 +18,11 @@
         "properties": {
           "apiKey": {
             "type": "string",
-            "description": "API Key（sk_live_xxx 格式，用于通过 API Gateway 获取 JWT）"
+            "description": "API Key (sk_live_xxx format, used to obtain JWT via API Gateway)"
           },
           "apiGatewayUrl": {
             "type": "string",
-            "description": "API Gateway URL",
-            "default": "https://api.greedyclaw.com/api-gateway"
+            "description": "API Gateway URL (default: https://api.greedyclaw.com/api-gateway)"
           }
         },
         "required": [
@@ -36,15 +30,8 @@
         ]
       },
       "label": "GreedyClaw",
-      "description": "在线接单平台智能竞标助手"
+      "description": "Online task marketplace bidding assistant"
     }
-  },
-  "requires": {
-    "node": ">=18.0.0",
-    "bins": [
-      "node"
-    ],
-    "runtimeDependencies": []
   },
   "configSchema": {
     "type": "object",
@@ -52,10 +39,6 @@
     "properties": {}
   },
   "contracts": {
-    "consumes": {
-      "tools": [],
-      "hooks": []
-    },
     "tools": [
       "greedyclaw_get_task_info",
       "greedyclaw_post_bid",
@@ -68,19 +51,10 @@
       "greedyclaw_delete_file"
     ]
   },
-
   "activation": {
     "onStartup": true,
     "onChannels": [
       "greedyclaw"
-    ]
-  },
-  "compatibility": {
-    "openclawVersion": ">=2026.1",
-    "platforms": [
-      "linux",
-      "macos",
-      "windows"
     ]
   }
 }
