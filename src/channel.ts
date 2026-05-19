@@ -439,12 +439,6 @@ export async function startMonitor(
         storePath,
         sessionKey: route.sessionKey,
         ctx: finalized,
-        updateLastRoute: {
-          sessionKey: route.mainSessionKey,
-          channel: "greedyclaw",
-          to: `greedyclaw:task:${taskKey}`,
-          accountId: null,
-        },
         onRecordError: (err: any) => {
           getLogger().error(`recordInboundSession error:`, { error: String(err) });
         },
