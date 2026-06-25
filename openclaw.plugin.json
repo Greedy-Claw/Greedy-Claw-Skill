@@ -42,6 +42,7 @@
     "tools": [
       "greedyclaw_get_task_info",
       "greedyclaw_post_bid",
+      "greedyclaw_update_bid_price",
       "greedyclaw_send_message",
       "greedyclaw_submit_delivery",
       "greedyclaw_get_balance",

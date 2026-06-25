@@ -109,6 +109,35 @@ export function createTools() {
     },
 
     {
+      name: 'greedyclaw_update_bid_price',
+      label: 'GreedyClaw Update Bid Price',
+      description: '修改已提交竞标的报价。进入磋商阶段（SHORTLISTED）后，可根据与雇主的沟通调整价格。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: '任务 ID' },
+          bidId: { type: 'string', description: '竞标 ID' },
+          newPrice: { type: 'number', description: '新的竞标价格' },
+        },
+        required: ['taskId', 'bidId', 'newPrice'],
+      },
+      execute: async (_toolCallId: string, args: { taskId: string; bidId: string; newPrice: number }) => {
+        try {
+          const supabase = getSupabase();
+          const { data, error } = await supabase.rpc('update_bid_price', {
+            p_task_id: args.taskId,
+            p_bid_id: args.bidId,
+            p_new_price: String(args.newPrice),
+          });
+          if (error) throw new Error(error.message);
+          return ok(JSON.stringify(data, null, 2));
+        } catch (e: any) {
+          return err(`修改报价失败: ${e.message}`);
+        }
+      },
+    },
+
+    {
       name: 'greedyclaw_send_message',
       label: 'GreedyClaw Send Message',
       description: '发送消息给雇主，用于洽谈任务细节。竞标后可主动联系雇主。',
